@@ -23,6 +23,8 @@ The hosted portal corresponds to source commit `ae90432f52c08d6596632c9c5af5458a
 
 ## Run the full Next.js app
 
+For the existing Render web service, use the exact build and environment settings in [`nextjs-app/RENDER.md`](nextjs-app/RENDER.md). The Dockerfile supports both a repository-root and app-directory build context through `APP_SOURCE`.
+
 Use Node.js 22+ and npm. From `nextjs-app`:
 
 ```sh

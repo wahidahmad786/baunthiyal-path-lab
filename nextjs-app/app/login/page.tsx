@@ -29,7 +29,9 @@ export default function Login() {
       if (!user.emailVerified) throw new Error('Please use a verified Google account.');
       if (!previewOnly) {
         await api('logout', {});
-        if (hasLabAdminAccess(token.claims)) await api('session', { idToken: token.token });
+        const configuration = await api<{ firebase: boolean }>('configuration');
+        if (configuration.firebase && hasLabAdminAccess(token.claims))
+          await api('session', { idToken: token.token });
       }
     } catch (error) {
       await signOut(auth);

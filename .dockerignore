@@ -1,0 +1,14 @@
+.git
+**/node_modules
+**/.next
+**/dist
+**/out
+**/.firebase
+**/.env*
+!**/.env.example
+!**/.env.runtime.example
+**/*-debug.log
+**/*.tsbuildinfo
+**/hosting/static-files.generated.ts
+**/tests
+*.zip

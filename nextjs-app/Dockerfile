@@ -1,12 +1,13 @@
 FROM node:22-bookworm-slim AS dependencies
 WORKDIR /app
-COPY package.json package-lock.json ./
+ARG APP_SOURCE=.
+COPY ${APP_SOURCE}/package.json ${APP_SOURCE}/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-FROM node:22-bookworm-slim AS builder
+FROM dependencies AS builder
 WORKDIR /app
-COPY --from=dependencies /app/node_modules ./node_modules
-COPY . .
+ARG APP_SOURCE=.
+COPY ${APP_SOURCE}/ .
 ARG NEXT_PUBLIC_FIREBASE_API_KEY
 ARG NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
 ARG NEXT_PUBLIC_FIREBASE_PROJECT_ID
