@@ -6,6 +6,9 @@ export type MarketingTemplateResult = {
   approvedMarketing: number;
   unsupported: number;
   reasons: string[];
+  unavailableTemplates: { id: string; name: string; language: string; reasons: string[] }[];
+  pendingMarketing: number;
+  rejectedMarketing: number;
 };
 
 /** Only fixed, safe messages may cross the account API boundary. */
@@ -29,7 +32,7 @@ const reason = {
   invalid: 'Some approved marketing templates have incomplete template details.',
   components:
     'Some approved marketing templates use unsupported components such as carousel or flow.',
-  header: 'Only templates with an image header or no header are supported.',
+  header: 'Only image headers and fixed text headers are supported.',
   buttons: 'Only static URL, phone-number and quick-reply buttons are supported.',
   dynamicButton: 'Templates with dynamic button URLs are not supported by this sender.',
   identity: 'Approved templates must include Baunthiyal Path Lab and Your Health, Our Priority.',
@@ -115,12 +118,23 @@ function classify(value: ObjectValue): { template: Template | null; reasons: str
   const body = bodies[0]?.text;
   if (typeof body !== 'string' || !body.trim() || body.length > 32768)
     return { template: null, reasons: [...problems, reason.invalid] };
-  if (headers.length && headers[0]?.format !== 'IMAGE') problems.add(reason.header);
+  const headerText = headers[0]?.format === 'TEXT' ? headers[0]?.text : undefined;
+  if (
+    headers.length &&
+    headers[0]?.format !== 'IMAGE' &&
+    !(typeof headerText === 'string' && headerText.trim() && !/\{\{/.test(headerText))
+  )
+    problems.add(reason.header);
   if (footers.some((footer) => typeof footer?.text !== 'string' || /\{\{/.test(footer.text)))
     problems.add(reason.components);
-  if (!/Baunthiyal\s+Path\s+Lab/i.test(body) || !/Your Health,\s*Our Priority/i.test(body))
+  const footer = typeof footers[0]?.text === 'string' ? footers[0].text : '';
+  const messageText = [headerText || '', body, footer].join('\n');
+  if (
+    !/Baunthiyal\s+Path\s+Lab/i.test(messageText) ||
+    !/Your Health,\s*Our Priority/i.test(messageText)
+  )
     problems.add(reason.identity);
-  if (!/reply\s+STOP\b/i.test(body)) problems.add(reason.optOut);
+  if (!/reply\s+STOP\b/i.test(messageText)) problems.add(reason.optOut);
   if (!/\{\{[a-zA-Z0-9_]+\}\}/.test(body)) problems.add(reason.attribution);
 
   const buttons: Array<NonNullable<Template['buttons']>[number] & { phone_number?: string }> = [];
@@ -184,7 +198,9 @@ function classify(value: ObjectValue): { template: Template | null; reasons: str
       status: 'APPROVED',
       category: 'MARKETING',
       body,
-      ...(headers.length ? { header: 'IMAGE' } : {}),
+      ...(headers.length ? { header: String(headers[0]?.format) } : {}),
+      ...(typeof headerText === 'string' ? { headerText } : {}),
+      ...(footer ? { footer } : {}),
       buttons,
     },
     reasons: [],
@@ -226,6 +242,9 @@ export async function loadMarketingTemplates(
     approvedMarketing: 0,
     unsupported: 0,
     reasons: [],
+    unavailableTemplates: [],
+    pendingMarketing: 0,
+    rejectedMarketing: 0,
   };
   const reasons = new Set<string>();
   const seenTemplates = new Set<string>();
@@ -273,11 +292,15 @@ export async function loadMarketingTemplates(
       );
     for (const raw of data.data) {
       const template = object(raw);
-      if (!template || template.status !== 'APPROVED' || template.category !== 'MARKETING')
-        continue;
+      if (!template || template.category !== 'MARKETING') continue;
       if (typeof template.id === 'string') {
         if (seenTemplates.has(template.id)) continue;
         seenTemplates.add(template.id);
+      }
+      if (template.status !== 'APPROVED') {
+        if (template.status === 'PENDING') result.pendingMarketing++;
+        if (template.status === 'REJECTED') result.rejectedMarketing++;
+        continue;
       }
       result.approvedMarketing++;
       const checked = classify(template);
@@ -285,6 +308,17 @@ export async function loadMarketingTemplates(
       else {
         result.unsupported++;
         for (const problem of checked.reasons) reasons.add(problem);
+        if (
+          typeof template.id === 'string' &&
+          typeof template.name === 'string' &&
+          typeof template.language === 'string'
+        )
+          result.unavailableTemplates.push({
+            id: template.id.slice(0, 200),
+            name: template.name.slice(0, 512),
+            language: template.language.slice(0, 32),
+            reasons: checked.reasons,
+          });
       }
     }
     const paging = object(data.paging);

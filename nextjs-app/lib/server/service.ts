@@ -17,7 +17,14 @@ import {
   shouldUpdateDelivery,
 } from '../domain';
 import { money } from '../brand';
-import { approvedTemplates, validateTemplate, sendTemplate, MetaError } from './whatsapp';
+import {
+  approvedTemplates,
+  validateTemplate,
+  sendTemplate,
+  uploadTemplateImage,
+  MetaError,
+} from './whatsapp';
+import { bannerReference } from '../banner';
 export const col = (name: string) => db().collection(`bpl_${name}`);
 export const hash = (v: string) => createHash('sha256').update(v).digest('hex');
 export const secretToken = () => randomBytes(24).toString('base64url');
@@ -189,8 +196,29 @@ async function messageValues(c: Campaign, customer: Customer, offer: Offer) {
     Object.entries(c.variables).map(([key, value]) => [key, values[value]]),
   );
 }
+const bannerMediaCache = new Map<string, { media: string; expires: number }>();
 async function bannerUrl(path: string) {
   if (!path) return undefined;
+  const reference = bannerReference(path);
+  if (reference) {
+    const key = `${path}:${process.env.WHATSAPP_PHONE_NUMBER_ID}:${hash(process.env.WHATSAPP_ACCESS_TOKEN || '')}`;
+    const cached = bannerMediaCache.get(key);
+    if (cached && cached.expires > Date.now()) return cached.media;
+    const document = await db()
+      .doc(`bpl_customerWorkspaces/${reference.uid}/banners/${reference.id}`)
+      .get();
+    const value = document.data();
+    if (
+      !value ||
+      value.ownerId !== reference.uid ||
+      !['image/png', 'image/jpeg'].includes(value.contentType)
+    )
+      throw new HttpError(404, 'The campaign banner is unavailable. Upload it again.');
+    const media = await uploadTemplateImage(new Uint8Array(value.content), value.contentType);
+    if (bannerMediaCache.size > 100) bannerMediaCache.clear();
+    bannerMediaCache.set(key, { media, expires: Date.now() + 3600000 });
+    return media;
+  }
   if (!/^campaign-banners\/[a-zA-Z0-9_.-]+$/.test(path))
     throw new HttpError(400, 'Invalid banner path');
   const [url] = await bucket()

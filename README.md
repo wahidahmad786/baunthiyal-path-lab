@@ -14,6 +14,9 @@ The hosted portal corresponds to source commit `ae90432f52c08d6596632c9c5af5458a
 
 ## Current operating state
 
+- Public privacy policy, terms, data deletion instructions and contact pages are available on the Render app; see `nextjs-app/docs/META_PUBLIC_PAGES.md` for the exact Meta settings URLs.
+- Campaign banners can be optimized and saved in the signed-in user's Firestore workspace, with image previews preserved across wizard steps. This does not require a paid Storage bucket.
+
 - Google/Firebase sign-in and account-scoped customer/catalog/offer/integration APIs are implemented. The reference library contains 439 tests; reference entries have no invented prices.
 - The inbox shows records received by the API and provides customer WhatsApp links. It does not import historical mobile WhatsApp chats.
 - The callback is private and `WHATSAPP_WEBHOOK_PUBLIC_READY=false`. New Meta callbacks and live inbox replies are inactive until the owner explicitly enables public callback access, completes Meta subscription and supplies valid runtime credentials.

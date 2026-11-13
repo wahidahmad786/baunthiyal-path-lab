@@ -18,8 +18,8 @@ import { OfferInput, Customer, Campaign } from '../lib/domain';
 process.env.FIREBASE_PROJECT_ID ||= process.env.GCLOUD_PROJECT;
 Object.assign(process.env, {
   WHATSAPP_ACCESS_TOKEN: 'emulator-test-token',
-  WHATSAPP_PHONE_NUMBER_ID: 'emulator-test-phone',
-  WHATSAPP_BUSINESS_ACCOUNT_ID: 'emulator-test-waba',
+  WHATSAPP_PHONE_NUMBER_ID: '123456789',
+  WHATSAPP_BUSINESS_ACCOUNT_ID: '987654321',
   WHATSAPP_APP_SECRET: 'emulator-test-secret',
   WHATSAPP_VERIFY_TOKEN: 'emulator-test-verify',
   WHATSAPP_MARKETING_RATE_PAISE: '88',

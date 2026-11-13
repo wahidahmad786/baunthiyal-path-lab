@@ -106,6 +106,9 @@ export async function handleWhatsAppConnection(
           approvedMarketing: result.approvedMarketing,
           unsupported: result.unsupported,
           reasons: result.reasons,
+          unavailableTemplates: result.unavailableTemplates,
+          pendingMarketing: result.pendingMarketing,
+          rejectedMarketing: result.rejectedMarketing,
         });
       } catch (error) {
         if (error instanceof MetaTemplateError && [190, 102, 104].includes(error.code))

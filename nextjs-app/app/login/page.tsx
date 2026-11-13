@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import Link from 'next/link';
+import { LegalLinks } from '@/components/legal-links';
 import { ArrowLeft, LockKeyhole } from 'lucide-react';
 import {
   GoogleAuthProvider,
@@ -174,6 +175,7 @@ export default function Login() {
       </div>
       <div className="public-footer">
         Baunthiyal Path Lab<span>Your workspace · Your Health, Our Priority</span>
+        <LegalLinks />
       </div>
     </div>
   );

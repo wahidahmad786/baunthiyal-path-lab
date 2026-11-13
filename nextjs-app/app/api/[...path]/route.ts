@@ -48,6 +48,7 @@ import { verifyConnections } from '@/lib/server/setup';
 import { hasLabAdminAccess } from '@/lib/access';
 import { handleWhatsAppConnection } from '@/lib/whatsapp-connection-api';
 import { handleAccountCatalog } from '@/lib/account-catalog-api';
+import { handleAccountBanners } from '@/lib/account-banners-api';
 import { handleAccountChat } from '@/lib/account-chat-api';
 import { readFileSync } from 'node:fs';
 import { handleAccountCustomers } from '@/lib/account-customers-api';
@@ -92,6 +93,17 @@ function accountInboxRequest(request: Request) {
     webhookPublicReady: process.env.WHATSAPP_WEBHOOK_PUBLIC_READY === 'true',
   });
 }
+function accountBannerRequest(request: Request) {
+  return handleAccountBanners(request, {
+    projectId: process.env.FIREBASE_PROJECT_ID || '',
+    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
+    serviceAccountJson:
+      process.env.WHATSAPP_SERVICE_ACCOUNT_JSON ||
+      (process.env.WHATSAPP_SERVICE_ACCOUNT_FILE
+        ? readFileSync(process.env.WHATSAPP_SERVICE_ACCOUNT_FILE, 'utf8')
+        : ''),
+  });
+}
 async function body(request: Request) {
   const text = await request.text();
   if (text.length > 100000) throw new HttpError(413, 'Request is too large');
@@ -124,6 +136,7 @@ export async function GET(request: NextRequest, context: Context) {
   try {
     const p = (await context.params).path;
     const key = p.join('/');
+    if (p[0] === 'account' && p[1] === 'banners') return accountBannerRequest(request);
     if (p[0] === 'account' && (p[1] === 'catalog' || p[1] === 'offers'))
       return accountCatalogRequest(request);
     if (p[0] === 'account' && p[1] === 'inbox') return accountInboxRequest(request);
@@ -232,6 +245,7 @@ export async function POST(request: NextRequest, context: Context) {
   try {
     const p = (await context.params).path;
     const key = p.join('/');
+    if (p[0] === 'account' && p[1] === 'banners') return accountBannerRequest(request);
     if (p[0] === 'account' && (p[1] === 'catalog' || p[1] === 'offers'))
       return accountCatalogRequest(request);
     if (p[0] === 'account' && p[1] === 'inbox') return accountInboxRequest(request);

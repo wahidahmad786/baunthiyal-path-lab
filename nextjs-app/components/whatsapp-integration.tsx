@@ -32,6 +32,10 @@ export default function WhatsAppIntegration({
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [siteOrigin, setSiteOrigin] = useState('');
+  useEffect(() => {
+    setSiteOrigin(window.location.origin);
+  }, []);
   const [verificationFailed, setVerificationFailed] = useState(false);
   async function request(data?: unknown) {
     const user = labClientAuth().currentUser;
@@ -315,6 +319,31 @@ export default function WhatsAppIntegration({
               applicable, and customers who have opted in. Verifying credentials does not send any
               messages.
             </p>
+          </div>
+          <div className="integration-help-note meta-policy-links">
+            <strong>Public URLs for Meta app settings</strong>
+            <p>
+              Use these public pages in your Meta app settings. Meta controls app review and Live
+              mode. WhatsApp API access still requires a valid access token in Live mode.
+            </p>
+            {[
+              ['Privacy policy', 'privacy-policy'],
+              ['Terms of service', 'terms'],
+              ['User data deletion instructions', 'data-deletion'],
+              ['Contact', 'contact'],
+            ].map(([label, path]) => (
+              <div key={path}>
+                <a href={`/${path}`} target="_blank" rel="noopener noreferrer">
+                  {label} <ExternalLink size={11} />
+                </a>
+                <input
+                  aria-label={`${label} URL`}
+                  readOnly
+                  value={siteOrigin ? `${siteOrigin}/${path}` : ''}
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+              </div>
+            ))}
           </div>
           {saved?.verifiedAt && (
             <div className="integration-help-note">

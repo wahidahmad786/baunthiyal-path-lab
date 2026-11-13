@@ -131,6 +131,8 @@ export type Template = {
   category: string;
   body: string;
   header?: string;
+  headerText?: string;
+  footer?: string;
   buttons?: { type: string; text: string; url?: string }[];
 };
 export type Booking = {

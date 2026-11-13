@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { LegalLinks } from './legal-links';
 import { ArrowRight, FlaskConical, HeartPulse, ShieldCheck, Users } from 'lucide-react';
 export default function PublicHome() {
   return (
@@ -68,6 +69,7 @@ export default function PublicHome() {
       </div>
       <footer className="lab-home-footer">
         © {new Date().getFullYear()} Baunthiyal Path Lab · Your Health, Our Priority
+        <LegalLinks />
       </footer>
     </div>
   );

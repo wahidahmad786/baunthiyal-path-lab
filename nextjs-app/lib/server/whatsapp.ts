@@ -1,6 +1,9 @@
 import 'server-only';
+import { createHmac } from 'node:crypto';
 import { Template, templateParameters } from '../domain';
 import { HttpError } from './auth';
+import { loadMarketingTemplates, MetaTemplateError } from '../meta-marketing-templates';
+import { imageDetails, MAX_STORED_BANNER_BYTES } from '../banner';
 export function whatsappConfigured() {
   return [
     'WHATSAPP_ACCESS_TOKEN',
@@ -17,11 +20,18 @@ function graphUrl(path: string) {
 }
 async function graph(path: string, init: RequestInit = {}) {
   if (!whatsappConfigured()) throw new HttpError(503, 'WhatsApp Business API is not configured');
-  const res = await fetch(graphUrl(path), {
+  const url = new URL(graphUrl(path));
+  url.searchParams.set(
+    'appsecret_proof',
+    createHmac('sha256', process.env.WHATSAPP_APP_SECRET!)
+      .update(process.env.WHATSAPP_ACCESS_TOKEN!)
+      .digest('hex'),
+  );
+  const res = await fetch(url, {
     ...init,
     headers: {
       Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
-      'Content-Type': 'application/json',
+      ...(init.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...init.headers,
     },
     signal: AbortSignal.timeout(20000),
@@ -50,34 +60,27 @@ export class MetaError extends HttpError {
   }
 }
 export async function approvedTemplates(): Promise<Template[]> {
-  let path = `${process.env.WHATSAPP_BUSINESS_ACCOUNT_ID}/message_templates?fields=id,name,language,status,category,components&limit=100`;
-  const result: Template[] = [];
-  for (let page = 0; page < 10; page++) {
-    const data = await graph(path);
-    for (const t of data.data || []) {
-      if (t.status !== 'APPROVED' || t.category !== 'MARKETING') continue;
-      const cs = t.components || [];
-      const body = cs.find((c: { type: string }) => c.type === 'BODY')?.text || '';
-      const header = cs.find((c: { type: string }) => c.type === 'HEADER');
-      const buttons = cs.find((c: { type: string }) => c.type === 'BUTTONS')?.buttons || [];
-      if (header && header.format !== 'IMAGE') continue;
-      if (buttons.some((b: { url?: string }) => b.url?.includes('{{'))) continue;
-      result.push({
-        id: t.id,
-        name: t.name,
-        language: t.language,
-        status: t.status,
-        category: t.category,
-        body,
-        ...(header?.format ? { header: header.format } : {}),
-        buttons,
-      });
-    }
-    const after = data.paging?.cursors?.after;
-    if (!data.paging?.next || !after) break;
-    path = `${process.env.WHATSAPP_BUSINESS_ACCOUNT_ID}/message_templates?fields=id,name,language,status,category,components&limit=100&after=${encodeURIComponent(after)}`;
+  try {
+    const result = await loadMarketingTemplates(
+      {
+        phone: process.env.LAB_PHONE || '',
+        phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
+        businessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '',
+        appId: '',
+        accessToken: process.env.WHATSAPP_ACCESS_TOKEN || '',
+        appSecret: process.env.WHATSAPP_APP_SECRET || '',
+        verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || '',
+        verifiedAt: null,
+        verifiedName: '',
+      },
+      process.env.WHATSAPP_GRAPH_VERSION || 'v23.0',
+    );
+    return result.templates;
+  } catch (error) {
+    if (error instanceof MetaTemplateError)
+      throw new MetaError(error.status, error.code, error.message);
+    throw error;
   }
-  return result;
 }
 export function validateTemplate(
   template: Template,
@@ -86,11 +89,12 @@ export function validateTemplate(
 ) {
   if (template.status !== 'APPROVED' || template.category !== 'MARKETING')
     throw new HttpError(400, 'An approved marketing template is required');
-  if (!/reply\s+STOP\b/i.test(template.body))
+  const messageText = [template.headerText || '', template.body, template.footer || ''].join('\n');
+  if (!/reply\s+STOP\b/i.test(messageText))
     throw new HttpError(400, 'The approved template must include a reply STOP opt-out instruction');
   if (
-    !/Baunthiyal\s+Path\s+Lab/i.test(template.body) ||
-    !/Your Health,\s*Our Priority/i.test(template.body)
+    !/Baunthiyal\s+Path\s+Lab/i.test(messageText) ||
+    !/Your Health,\s*Our Priority/i.test(messageText)
   )
     throw new HttpError(
       400,
@@ -113,7 +117,10 @@ export async function sendTemplate(
   const components: object[] = [];
   if (template.header === 'IMAGE') {
     if (!imageUrl) throw new HttpError(400, 'A banner is required');
-    components.push({ type: 'header', parameters: [{ type: 'image', image: { link: imageUrl } }] });
+    const image = /^meta-media:\d{5,100}$/.test(imageUrl)
+      ? { id: imageUrl.slice(11) }
+      : { link: imageUrl };
+    components.push({ type: 'header', parameters: [{ type: 'image', image }] });
   }
   if (keys.length)
     components.push({
@@ -137,6 +144,25 @@ export async function sendTemplate(
   const id = data.messages?.[0]?.id;
   if (!id) throw new Error('Meta returned no message ID; delivery is uncertain');
   return id as string;
+}
+
+export async function uploadTemplateImage(bytes: Uint8Array, contentType: string): Promise<string> {
+  if (bytes.length > MAX_STORED_BANNER_BYTES || imageDetails(bytes)?.type !== contentType)
+    throw new HttpError(400, 'The campaign banner is invalid. Upload it again.');
+  const body = new FormData();
+  body.set('messaging_product', 'whatsapp');
+  body.set(
+    'file',
+    new Blob([new Uint8Array(bytes)], { type: contentType }),
+    contentType === 'image/png' ? 'banner.png' : 'banner.jpg',
+  );
+  const result = await graph(`${process.env.WHATSAPP_PHONE_NUMBER_ID}/media`, {
+    method: 'POST',
+    body,
+  });
+  if (typeof result.id !== 'string' || !/^\d{5,100}$/.test(result.id))
+    throw new HttpError(502, 'Meta did not return a valid banner media ID.');
+  return `meta-media:${result.id}`;
 }
 
 export async function inspectPhone() {

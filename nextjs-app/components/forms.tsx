@@ -31,6 +31,7 @@ import { money } from '@/lib/brand';
 import { api, accountApi, Modal, Field, Notice, Submit, dateLabel } from './ui';
 import type { Configuration, State, TestRecord } from './dashboard';
 import type { SetupReport } from '@/lib/setup-types';
+import { CampaignBanner } from './campaign-banner';
 const localDate = (offset = 0) => {
   const d = new Date(Date.now() + offset * 86400000);
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
@@ -72,9 +73,21 @@ export function CampaignForm({
   const [error, setError] = useState('');
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templateError, setTemplateError] = useState('');
+  const [bannerPreview, setBannerPreview] = useState('');
+  useEffect(
+    () => () => {
+      if (bannerPreview) URL.revokeObjectURL(bannerPreview);
+    },
+    [bannerPreview],
+  );
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templatesChecked, setTemplatesChecked] = useState(false);
   const [templateReasons, setTemplateReasons] = useState<string[]>([]);
+  const [unavailableTemplates, setUnavailableTemplates] = useState<
+    { id: string; name: string; language: string; reasons: string[] }[]
+  >([]);
+  const [pendingMarketing, setPendingMarketing] = useState(0);
+  const [rejectedMarketing, setRejectedMarketing] = useState(0);
   const [approvedMarketing, setApprovedMarketing] = useState(0);
   const [senderVerified, setSenderVerified] = useState(false);
   const templateRequest = useRef(0);
@@ -129,16 +142,25 @@ export function CampaignForm({
     setTemplatesChecked(false);
     setTemplates([]);
     setTemplateReasons([]);
+    setUnavailableTemplates([]);
+    setPendingMarketing(0);
+    setRejectedMarketing(0);
     try {
       const result = await (accountWhatsApp ? accountApi : api)<{
         templates: Template[];
         approvedMarketing?: number;
         reasons?: string[];
+        unavailableTemplates?: { id: string; name: string; language: string; reasons: string[] }[];
+        pendingMarketing?: number;
+        rejectedMarketing?: number;
       }>(accountWhatsApp ? 'whatsapp/integration/templates' : 'templates');
       if (request !== templateRequest.current) return;
       setTemplates(result.templates);
       setApprovedMarketing(result.approvedMarketing ?? result.templates.length);
       setTemplateReasons(result.reasons || []);
+      setUnavailableTemplates(result.unavailableTemplates || []);
+      setPendingMarketing(result.pendingMarketing || 0);
+      setRejectedMarketing(result.rejectedMarketing || 0);
       setTemplatesChecked(true);
       onConnectionCheck?.(true);
     } catch (e) {
@@ -347,43 +369,19 @@ export function CampaignForm({
                 </div>
               </div>
             )}
-            <Field
-              label="Promotional banner"
-              hint="PNG or JPEG, up to 5 MB. Used for approved image-header templates."
-            >
-              <div className="upload-field">
-                <ImagePlus size={26} />
-                <div>
-                  <strong>
-                    {input.bannerPath ? 'Banner uploaded' : 'Add a little visual care'}
-                  </strong>
-                  <small>{input.bannerPath || 'Choose a professional promotional banner.'}</small>
-                </div>
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg"
-                  disabled={!ready || busy}
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    setBusy(true);
-                    setError('');
-                    try {
-                      const fd = new FormData();
-                      fd.append('file', file);
-                      const res = await fetch('/api/banners', { method: 'POST', body: fd });
-                      const d = await res.json();
-                      if (!res.ok) throw new Error(d.error);
-                      update({ bannerPath: d.path });
-                    } catch (e) {
-                      setError(String(e));
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                />
-              </div>
-            </Field>
+            <div className="field">
+              <span>Promotional banner</span>
+              <CampaignBanner
+                path={input.bannerPath}
+                enabled={(ready || accountWhatsApp) && !busy}
+                onChange={(path) => update({ bannerPath: path })}
+                onPreview={setBannerPreview}
+                onBusyChange={setBusy}
+              />
+              <small>
+                Use an approved template with an image header to include the banner in WhatsApp.
+              </small>
+            </div>
           </>
         )}
         {step === 1 && (
@@ -619,9 +617,20 @@ export function CampaignForm({
                         {t.name} · {t.language}
                       </option>
                     ))}
+                    {unavailableTemplates.map((t) => (
+                      <option key={t.id} value={`unavailable-${t.id}`} disabled>
+                        {t.name} · {t.language} — needs changes
+                      </option>
+                    ))}
                   </select>
                 </Field>
-                {templateError && <Notice error>{templateError}</Notice>}
+                {templateError && (
+                  <Notice error>
+                    {templateError}{' '}
+                    {templateError.includes('190') &&
+                      'Live apps still require a valid WhatsApp access token. Update the token in WhatsApp Integration; do not remove authentication.'}
+                  </Notice>
+                )}
                 {(accountWhatsApp || config?.whatsapp) && (
                   <button
                     type="button"
@@ -660,6 +669,31 @@ export function CampaignForm({
                     </a>
                   </Notice>
                 )}
+                {templatesChecked && (pendingMarketing > 0 || rejectedMarketing > 0) && (
+                  <Notice>
+                    Meta reports {pendingMarketing} pending and {rejectedMarketing} rejected
+                    marketing template(s). These become available only after Meta approval.
+                  </Notice>
+                )}
+                {unavailableTemplates.length > 0 && (
+                  <details className="template-diagnostics">
+                    <summary>
+                      Why some approved templates cannot be sent ({unavailableTemplates.length})
+                    </summary>
+                    {unavailableTemplates.map((t) => (
+                      <div key={t.id}>
+                        <strong>
+                          {t.name} · {t.language}
+                        </strong>
+                        <ul>
+                          {t.reasons.map((reason) => (
+                            <li key={reason}>{reason}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </details>
+                )}
                 {template && (
                   <>
                     <div className="section-heading">
@@ -689,6 +723,12 @@ export function CampaignForm({
                     ))}
                   </>
                 )}
+                {bannerPreview && template && template.header !== 'IMAGE' && (
+                  <Notice>
+                    This template has no image header. Choose an image-header template to send your
+                    banner with the message.
+                  </Notice>
+                )}
                 <div className="consent-notice small-consent">
                   <ShieldCheck size={19} />
                   <p>
@@ -710,7 +750,20 @@ export function CampaignForm({
                     {template ? 'TEMPLATE PREVIEW' : 'ILLUSTRATIVE EXAMPLE'}
                   </span>
                   <div className="preview-bubble">
+                    {(!template || template.header === 'IMAGE') && bannerPreview && (
+                      <img
+                        className="message-banner"
+                        src={bannerPreview}
+                        alt="Campaign banner in WhatsApp preview"
+                      />
+                    )}
+                    {template?.headerText && (
+                      <strong className="message-template-header">{template.headerText}</strong>
+                    )}
                     {preview}
+                    {template?.footer && (
+                      <small className="message-template-footer">{template.footer}</small>
+                    )}
                     <div className="bubble-meta">
                       Preview <CheckCheck size={12} />
                     </div>
@@ -732,13 +785,13 @@ export function CampaignForm({
         </button>
         <div className="inline-actions">
           {step > 0 && (
-            <button className="button secondary" onClick={() => setStep(step - 1)}>
+            <button className="button secondary" disabled={busy} onClick={() => setStep(step - 1)}>
               <ArrowLeft size={15} />
               Back
             </button>
           )}
           {step < 2 ? (
-            <button className="button primary" onClick={() => setStep(step + 1)}>
+            <button className="button primary" disabled={busy} onClick={() => setStep(step + 1)}>
               Continue <ArrowRight size={15} />
             </button>
           ) : (

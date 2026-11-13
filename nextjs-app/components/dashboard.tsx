@@ -47,6 +47,7 @@ import {
 import { BRAND, money } from '@/lib/brand';
 import { onIdTokenChanged, signOut } from 'firebase/auth';
 import { labClientAuth, clientAuthConfigured, previewOnly } from '@/lib/client-auth';
+import { LegalLinks } from './legal-links';
 import { hasLabAdminAccess } from '@/lib/access';
 import type { FirebaseSetupSnapshot } from '@/lib/setup-types';
 import WhatsAppIntegration from './whatsapp-integration';
@@ -470,6 +471,7 @@ export default function Dashboard() {
           </a>
         )}
         <div className="sidebar-bottom">
+          <LegalLinks />
           <div className="consent-card">
             <div className="consent-icon">
               <ShieldCheck size={20} />

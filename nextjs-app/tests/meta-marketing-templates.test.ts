@@ -82,10 +82,17 @@ test('only actual supported approved marketing templates are returned with expli
   const result = await loadMarketingTemplates(connection, 'v23.0', send);
   assert.deepEqual(
     result.templates.map((template) => template.id),
-    ['1', '2'],
+    ['1', '2', '5'],
   );
   assert.equal(result.approvedMarketing, 9);
-  assert.equal(result.unsupported, 7);
+  assert.equal(result.unsupported, 6);
+  assert.equal(result.pendingMarketing, 1);
+  assert.equal(result.unavailableTemplates.length, 6);
+  assert.ok(
+    result.unavailableTemplates.some(
+      (t) => t.id === '6' && t.reasons.some((r) => r.includes('dynamic button')),
+    ),
+  );
   assert.equal(result.templates[0].header, 'IMAGE');
   assert.equal(result.templates[0].buttons?.length, 3);
   assert.ok(result.reasons.some((reason) => reason.includes('Baunthiyal Path Lab')));
@@ -93,6 +100,30 @@ test('only actual supported approved marketing templates are returned with expli
   assert.ok(result.reasons.some((reason) => reason.includes('booking link')));
   assert.ok(result.reasons.some((reason) => reason.includes('dynamic button')));
   assert.ok(!JSON.stringify(result).includes('not-returned-example'));
+});
+
+test('approved fixed headers and footer branding/opt-out are respected without changing approved wording', async () => {
+  const result = await loadMarketingTemplates(connection, 'v23.0', (async () =>
+    Response.json({
+      data: [
+        approved('footer', [
+          { type: 'HEADER', format: 'TEXT', text: 'Baunthiyal Path Lab' },
+          { type: 'BODY', text: 'Hello {{customer_name}}, book {{booking_link}}.' },
+          { type: 'FOOTER', text: 'Your Health, Our Priority. Reply STOP to opt out.' },
+        ]),
+        approved('variable-header', [
+          { type: 'HEADER', format: 'TEXT', text: 'Offer {{1}}' },
+          { type: 'BODY', text: body },
+        ]),
+        { ...approved('rejected'), status: 'REJECTED' },
+      ],
+    })) as typeof fetch);
+  assert.equal(result.templates.length, 1);
+  assert.equal(result.templates[0].header, 'TEXT');
+  assert.equal(result.templates[0].headerText, 'Baunthiyal Path Lab');
+  assert.match(result.templates[0].footer!, /Reply STOP/);
+  assert.equal(result.rejectedMarketing, 1);
+  assert.equal(result.unsupported, 1);
 });
 
 test('pagination rebuilds only official Graph URLs and sends credentials only in the authorization header', async () => {
