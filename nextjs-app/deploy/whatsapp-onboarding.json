@@ -1,0 +1,28 @@
+{
+  "senderPhone": "+916395951791",
+  "connectionMode": "whatsapp_business_app_coexistence",
+  "retainMobileBusinessApp": true,
+  "connectionStatus": "pending_coexistence_onboarding",
+  "metaBrowserControlAvailable": false,
+  "credentialsConfigured": false,
+  "quotedMarketingRate": {
+    "currency": "INR",
+    "perDeliveredMessage": "0.8631",
+    "source": "owner_provided_Meta_pricing_screenshot",
+    "capturedDate": "2026-11-11",
+    "taxAndProviderFeesIncluded": false
+  },
+  "pricingAcknowledgedByOwner": true,
+  "recurringProviderPlanSelected": false,
+  "firebasePlanPreference": "Spark",
+  "backendDeployed": false,
+  "campaignsLaunched": false,
+  "metaBusinessPortfolioId": "2151226482141006",
+  "metaBusinessPortfolioName": "Baunthiyalpathlab.com",
+  "metaBusinessPortfolioSource": "owner_screenshots",
+  "appsListedInSelectedPortfolio": false,
+  "whatsappAccountsListedInSelectedPortfolio": false,
+  "whatsappBusinessAccountId": null,
+  "phoneNumberId": null,
+  "businessPortfolioIdIsNotWabaId": true
+}

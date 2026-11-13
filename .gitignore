@@ -1,0 +1,17 @@
+**/node_modules/
+**/.next/
+**/out/
+**/dist/
+**/.firebase/
+**/.env*
+!**/.env.example
+!**/.env.runtime.example
+**/*.tsbuildinfo
+**/*-debug.log
+**/test-results/
+**/playwright-report/
+**/hosting/static-files.generated.ts
+*.zip
+*.pem
+*.p12
+*.key

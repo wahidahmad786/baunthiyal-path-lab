@@ -1,0 +1,30 @@
+# Diagnostic test reference catalog
+
+Catalog version: **13 November 2026**. The application includes **439 named diagnostic assays and commonly ordered laboratory panels across 27 categories**. IDs are application reference IDs, not another laboratory’s test codes. Existing IDs must remain stable; add new entries with new IDs.
+
+This is a broad starting catalog, not an exhaustive list of every test offered in India. Laboratories continually add assays, specimen-specific variants and panels. Names and aliases identify an orderable test family; they do not establish Baunthiyal Path Lab’s own or a partner laboratory’s current scope, accreditation, assay method, sample requirements or turnaround time.
+
+No vendor prices, turnaround claims, reference ranges, collection instructions or proprietary descriptions were copied. No price is provided by this reference data. The account importer creates an unpriced reference record, and the laboratory must configure its actual rate and confirm availability before quoting or including it in an offer. A profile’s exact included parameters must be confirmed with the performing laboratory; similar panel names do not guarantee identical contents. Imported profiles are reference orderables and are distinct from a locally configured health-checkup package.
+
+## Sources read
+
+All sources below were accessed on **13 November 2026**. They support terminology and coverage; inclusion in this reference catalog is not a clinical recommendation or an assertion that every listed assay is indicated, currently recommended for every use, or available from this collection centre.
+
+1. **Apollo Diagnostics public test menu:** <https://www.apollodiagnostics.in/tests>. The returned public page displayed 968 test headings (963 unique verbatim headings), including routine chemistry and hematology, infectious serology, cultures, molecular assays, cytology/histopathology, genetics, specific-IgE allergy assays and therapeutic drug monitoring. The reference catalog selects a finite subset, standardizes names, merges obvious synonymous menu labels and omits numerous narrow variants. Names are factual assay labels; the application does not reproduce the vendor’s descriptions or prices.
+2. **Apollo Diagnostics wheat allergy page:** <https://www.apollodiagnostics.in/tests/wheat-allergy>. Read to confirm the public menu’s allergy entries describe a blood IgE assay, rather than relabeling a food-intolerance IgG panel as an IgE allergy test. The reference uses explicit target names and treats distinct targets separately.
+3. **Tata 1mg public lab menu:** <https://www.1mg.com/labs>. Read as an independent Indian catalog for common naming, including CBC, thyroid/lipid/liver profiles, fasting glucose, urine routine examination, dengue NS1 and respiratory viral PCR.
+4. **Tata 1mg CBC page:** <https://www.1mg.com/labs/test/cbc-complete-blood-count-1717>. Read to cross-check the common CBC/hemogram naming. It does not supply an application price or a package composition promise.
+5. **Tata 1mg HbA1c page:** <https://www.1mg.com/labs/test/hba1c-glycosylated-hemoglobin-test-1611>. Read to cross-check the HbA1c/glycated-hemoglobin naming.
+6. **Tata 1mg viral flu PCR page:** <https://www.1mg.com/labs/test/viral-flu-panel-influenza-a-b-h3n2-h1n1-rsv-qualitative-rt-pcr-36883>. Read for the influenza A/B and RSV qualitative PCR panel label. The application omits the vendor’s prices and descriptions.
+7. **World Health Organization, _The selection and use of essential in vitro diagnostics_, WHO Technical Report Series 1053 (2023), including the fourth WHO model list:** <https://www.who.int/publications/i/item/9789240081093>. The linked full report was also read: <https://iris.who.int/server/api/core/bitstreams/69fa4fa6-8830-4e00-a6fc-63257b677f65/content>. Printed pages 133 and 178 identify SARS-CoV-2 antigen and nucleic-acid testing, respectively. The report also supplies context for the distinction between assay names, essential-diagnostics policy and a laboratory’s own available test menu. The catalog is **not** represented as the WHO list or as a WHO endorsement of all commercial menu entries.
+
+Attempted Dr Lal PathLabs and Metropolis menu requests returned access errors, and an ICMR candidate URL returned an error page. They were not used as supporting sources. A candidate Tata 1mg coronavirus URL resolved to a generic pharmacy page and was not used; the SARS-CoV-2 labels above were checked against the WHO report instead.
+
+## Scope and maintenance
+
+- Categories cover hematology, coagulation, diabetes, kidney/liver function, lipids/cardiac markers, electrolytes/metabolism, thyroid/endocrinology, nutritional markers, infectious serology, viral/bacterial molecular diagnostics, microbiology, autoimmune studies, immunology/protein studies, tumor markers, urine/stool/body-fluid studies, fertility, prenatal/newborn screening, cytology/histopathology, genetics/molecular oncology, flow cytometry, allergen-specific IgE and therapeutic monitoring/toxicology.
+- Specialized assays and specimen-specific variants may require referral laboratories. Catalog inclusion alone must not enable an availability claim.
+- Existing source-menu typos were normalized where the assay was clear: for example, Jo-1 is labeled as the antibody itself, FLT3-ITD as a mutation assay, and BCR-ABL1 as a molecular fusion test.
+- Profiles and panels are retained when they are commonly ordered as one laboratory service. Calculated indices and numerous near-duplicate specimen/method variants were reduced; the count is a count of reference entries, not a claim of 439 unique analytes.
+- Clinical ordering and method selection remain decisions for qualified clinicians and the performing laboratory. This file provides inventory terminology, not patient-specific advice.
+- Future changes should use an actual partner-lab rate/test list, preserve existing application IDs, add relevant aliases, and avoid introducing guessed prices or unsupported capability claims.

@@ -1,0 +1,281 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // bpl_whatsappConnections/{uid}: ownerId (immutable string, 1..128),
+    // version (integer, fixed 1), iv (base64 string, 16 chars),
+    // ciphertext (base64 string, 24..16000), createdAt (immutable timestamp),
+    // updatedAt (recent timestamp). No roles, plaintext tokens or patient data.
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid
+        && request.auth.token.email_verified == true;
+    }
+    function isValidConnection(data, uid) {
+      return data.keys().hasAll(['ownerId', 'version', 'iv', 'ciphertext', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'version', 'iv', 'ciphertext', 'createdAt', 'updatedAt'])
+        && data.ownerId is string && data.ownerId.size() > 0 && data.ownerId.size() <= 128
+        && data.ownerId == uid
+        && data.version is int && data.version == 1
+        && data.iv is string && data.iv.size() == 16 && data.iv.matches('^[A-Za-z0-9+/=]+$')
+        && data.ciphertext is string && data.ciphertext.size() >= 24 && data.ciphertext.size() <= 16000
+        && data.ciphertext.matches('^[A-Za-z0-9+/=]+$')
+        && data.createdAt is timestamp && data.updatedAt is timestamp
+        && data.updatedAt > request.time - duration.value(5, 'm')
+        && data.updatedAt < request.time + duration.value(1, 'm');
+    }
+    match /bpl_whatsappConnections/{uid} {
+      allow get: if isOwner(uid);
+      allow list: if false;
+      allow create: if isOwner(uid) && isValidConnection(request.resource.data, uid)
+        && request.resource.data.createdAt == request.resource.data.updatedAt;
+      allow update: if isOwner(uid) && isValidConnection(request.resource.data, uid)
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner(uid);
+    }
+    // bpl_customerWorkspaces/{uid}/customers/{customerId}:
+    // ownerId and id are immutable strings identifying the owner and 32-hex document.
+    // name (2..120), normalized phone (8..15 digits), createdAt (immutable timestamp),
+    // testIds (empty list), groups (0..10 strings of 1..80), visits (integer 0),
+    // optional age (integer 0..130). These registration fields are immutable here.
+    // marketing is exactly {status, source (3..200), at (timestamp), eventId}.
+    // A not_asked registration has no event; every recorded preference has a UUID
+    // referencing a new, immutable consent event in the same atomic write.
+    // bpl_customerWorkspaces/{uid}/consentEvents/{eventId}:
+    // exactly ownerId, customerId, status (opted_in|opted_out), source (3..200),
+    // actor (owner UID), createdAt (timestamp matching the customer's preference).
+    // Workspace parents and all other subcollections remain inaccessible.
+    function validCustomerString(value, minimum, maximum) {
+      return value is string && value.size() >= minimum && value.size() <= maximum;
+    }
+    function validCustomerId(value) {
+      return value is string && value.size() == 32 && value.matches('^[0-9a-f]{32}$');
+    }
+    function validConsentEventId(value) {
+      return value is string && value.size() == 36
+        && value.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$');
+    }
+    function recentCustomerTime(value) {
+      return value is timestamp
+        && value > request.time - duration.value(5, 'm')
+        && value < request.time + duration.value(1, 'm');
+    }
+    function validCustomerGroups(groups) {
+      return groups is list && groups.size() <= 10
+        && (groups.size() < 1 || validCustomerString(groups[0], 1, 80))
+        && (groups.size() < 2 || validCustomerString(groups[1], 1, 80))
+        && (groups.size() < 3 || validCustomerString(groups[2], 1, 80))
+        && (groups.size() < 4 || validCustomerString(groups[3], 1, 80))
+        && (groups.size() < 5 || validCustomerString(groups[4], 1, 80))
+        && (groups.size() < 6 || validCustomerString(groups[5], 1, 80))
+        && (groups.size() < 7 || validCustomerString(groups[6], 1, 80))
+        && (groups.size() < 8 || validCustomerString(groups[7], 1, 80))
+        && (groups.size() < 9 || validCustomerString(groups[8], 1, 80))
+        && (groups.size() < 10 || validCustomerString(groups[9], 1, 80));
+    }
+    function validCustomerMarketing(marketing) {
+      return marketing is map
+        && marketing.keys().hasAll(['status', 'source', 'at', 'eventId'])
+        && marketing.keys().hasOnly(['status', 'source', 'at', 'eventId'])
+        && marketing.status in ['opted_in', 'opted_out', 'not_asked']
+        && validCustomerString(marketing.source, 3, 200)
+        && marketing.at is timestamp
+        && ((marketing.status == 'not_asked' && marketing.eventId == '')
+          || (marketing.status in ['opted_in', 'opted_out'] && validConsentEventId(marketing.eventId)));
+    }
+    function isValidCustomer(data, uid, customerId) {
+      return data.keys().hasAll(['ownerId', 'id', 'name', 'phone', 'createdAt', 'testIds', 'groups', 'visits', 'marketing'])
+        && data.keys().hasOnly(['ownerId', 'id', 'name', 'phone', 'createdAt', 'testIds', 'groups', 'visits', 'marketing', 'age'])
+        && validCustomerString(data.ownerId, 1, 128) && data.ownerId == uid
+        && validCustomerId(data.id) && data.id == customerId
+        && validCustomerString(data.name, 2, 120)
+        && validCustomerString(data.phone, 8, 15) && data.phone.matches('^[1-9][0-9]{7,14}$')
+        && data.createdAt is timestamp
+        && data.testIds is list && data.testIds.size() == 0
+        && validCustomerGroups(data.groups)
+        && data.visits is int && data.visits == 0
+        && (!('age' in data) || (data.age is int && data.age >= 0 && data.age <= 130))
+        && validCustomerMarketing(data.marketing);
+    }
+    function isValidConsentEvent(data, uid) {
+      return data.keys().hasAll(['ownerId', 'customerId', 'status', 'source', 'actor', 'createdAt'])
+        && data.keys().hasOnly(['ownerId', 'customerId', 'status', 'source', 'actor', 'createdAt'])
+        && validCustomerString(data.ownerId, 1, 128) && data.ownerId == uid
+        && validCustomerId(data.customerId)
+        && data.status in ['opted_in', 'opted_out']
+        && validCustomerString(data.source, 3, 200)
+        && validCustomerString(data.actor, 1, 128) && data.actor == request.auth.uid
+        && recentCustomerTime(data.createdAt);
+    }
+    function newConsentMatchesCustomer(data, uid, customerId) {
+      let eventPath = /databases/$(database)/documents/bpl_customerWorkspaces/$(uid)/consentEvents/$(data.marketing.eventId);
+      let event = getAfter(eventPath).data;
+      return !exists(eventPath)
+        && isValidConsentEvent(event, uid)
+        && event.customerId == customerId
+        && event.status == data.marketing.status
+        && event.source == data.marketing.source
+        && event.createdAt == data.marketing.at;
+    }
+    function consentMatchesCustomerAfter(data, uid, eventId) {
+      let customerPath = /databases/$(database)/documents/bpl_customerWorkspaces/$(uid)/customers/$(data.customerId);
+      let customer = getAfter(customerPath).data;
+      return customer.ownerId == uid
+        && customer.id == data.customerId
+        && customer.marketing.eventId == eventId
+        && customer.marketing.status == data.status
+        && customer.marketing.source == data.source
+        && customer.marketing.at == data.createdAt;
+    }
+    match /bpl_customerWorkspaces/{uid}/customers/{customerId} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && isValidCustomer(request.resource.data, uid, customerId)
+        && recentCustomerTime(request.resource.data.createdAt)
+        && request.resource.data.marketing.at == request.resource.data.createdAt
+        && (request.resource.data.marketing.status == 'not_asked'
+          || (request.resource.data.marketing.status == 'opted_in'
+            && newConsentMatchesCustomer(request.resource.data, uid, customerId)));
+      allow update: if isOwner(uid) && isValidCustomer(request.resource.data, uid, customerId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['marketing'])
+        && request.resource.data.marketing.status in ['opted_in', 'opted_out']
+        && recentCustomerTime(request.resource.data.marketing.at)
+        && request.resource.data.marketing.eventId != resource.data.marketing.eventId
+        && newConsentMatchesCustomer(request.resource.data, uid, customerId);
+      allow delete: if false;
+    }
+    match /bpl_customerWorkspaces/{uid}/consentEvents/{eventId} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && validConsentEventId(eventId)
+        && isValidConsentEvent(request.resource.data, uid)
+        && consentMatchesCustomerAfter(request.resource.data, uid, eventId);
+      allow update, delete: if false;
+    }
+    // bpl_customerWorkspaces/{uid}/tests/{id}: exactly ownerId, id (1..100 safe
+    // identifier), name (2..180), type (test|package), price (null for an unknown
+    // rate, or integer paise 0..100000000), category (1..80), aliases (0..8
+    // strings of 1..100), createdAt (immutable timestamp), updatedAt (recent).
+    // bpl_customerWorkspaces/{uid}/offers/{id}: immutable offers with ownerId,
+    // BPL-OFFER-{UUID} id, title (3..120), description (5..1500), type enum,
+    // discountType, discountValue, originalPrice/offerPrice (integer paise),
+    // startsAt/expiresAt timestamps, 1..20 unique catalog IDs, eligibility enum,
+    // createdAt timestamp and usedCount fixed at 0. There is no activation field.
+    // The account API also verifies selected tests, known rates and their sum;
+    // these client rules validate ownership, bounded fields and price arithmetic.
+    function validCatalogId(value) {
+      return validCustomerString(value, 1, 100) && value.matches('^[A-Za-z0-9_-]+$');
+    }
+    function validCatalogAliases(aliases) {
+      return aliases is list && aliases.size() <= 8
+        && (aliases.size() < 1 || validCustomerString(aliases[0], 1, 100))
+        && (aliases.size() < 2 || validCustomerString(aliases[1], 1, 100))
+        && (aliases.size() < 3 || validCustomerString(aliases[2], 1, 100))
+        && (aliases.size() < 4 || validCustomerString(aliases[3], 1, 100))
+        && (aliases.size() < 5 || validCustomerString(aliases[4], 1, 100))
+        && (aliases.size() < 6 || validCustomerString(aliases[5], 1, 100))
+        && (aliases.size() < 7 || validCustomerString(aliases[6], 1, 100))
+        && (aliases.size() < 8 || validCustomerString(aliases[7], 1, 100));
+    }
+    function isValidCatalogEntry(data, uid, id) {
+      return data.keys().hasAll(['ownerId', 'id', 'name', 'type', 'price', 'category', 'aliases', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'id', 'name', 'type', 'price', 'category', 'aliases', 'createdAt', 'updatedAt'])
+        && validCustomerString(data.ownerId, 1, 128) && data.ownerId == uid
+        && validCatalogId(data.id) && data.id == id
+        && validCustomerString(data.name, 2, 180)
+        && data.type in ['test', 'package']
+        && (data.price == null || (data.price is int && data.price >= 0 && data.price <= 100000000))
+        && validCustomerString(data.category, 1, 80)
+        && validCatalogAliases(data.aliases)
+        && data.createdAt is timestamp
+        && recentCustomerTime(data.updatedAt)
+        && data.updatedAt >= data.createdAt;
+    }
+    function validOfferCatalogIds(ids) {
+      return ids is list && ids.size() >= 1 && ids.size() <= 20
+        && ids.toSet().size() == ids.size()
+        && validCatalogId(ids[0])
+        && (ids.size() < 2 || validCatalogId(ids[1]))
+        && (ids.size() < 3 || validCatalogId(ids[2]))
+        && (ids.size() < 4 || validCatalogId(ids[3]))
+        && (ids.size() < 5 || validCatalogId(ids[4]))
+        && (ids.size() < 6 || validCatalogId(ids[5]))
+        && (ids.size() < 7 || validCatalogId(ids[6]))
+        && (ids.size() < 8 || validCatalogId(ids[7]))
+        && (ids.size() < 9 || validCatalogId(ids[8]))
+        && (ids.size() < 10 || validCatalogId(ids[9]))
+        && (ids.size() < 11 || validCatalogId(ids[10]))
+        && (ids.size() < 12 || validCatalogId(ids[11]))
+        && (ids.size() < 13 || validCatalogId(ids[12]))
+        && (ids.size() < 14 || validCatalogId(ids[13]))
+        && (ids.size() < 15 || validCatalogId(ids[14]))
+        && (ids.size() < 16 || validCatalogId(ids[15]))
+        && (ids.size() < 17 || validCatalogId(ids[16]))
+        && (ids.size() < 18 || validCatalogId(ids[17]))
+        && (ids.size() < 19 || validCatalogId(ids[18]))
+        && (ids.size() < 20 || validCatalogId(ids[19]));
+    }
+    function validScopedOfferPrice(data) {
+      let deduction = data.originalPrice - data.offerPrice;
+      return data.originalPrice is int && data.originalPrice > 0 && data.originalPrice <= 100000000
+        && data.offerPrice is int && data.offerPrice >= 0 && data.offerPrice <= data.originalPrice
+        && data.discountValue is number && data.discountValue > 0
+        && ((data.discountType == 'fixed' && data.discountValue is int
+            && data.discountValue <= data.originalPrice && deduction == data.discountValue)
+          || (data.discountType == 'percentage' && data.discountValue <= 100
+            // This interval gives JS Math.round ties without rules integer division.
+            && data.originalPrice * data.discountValue >= deduction * 100 - 50
+            && data.originalPrice * data.discountValue < deduction * 100 + 50));
+    }
+    function isValidScopedOffer(data, uid, id) {
+      return data.keys().hasAll(['ownerId', 'id', 'title', 'description', 'type', 'discountType', 'discountValue', 'originalPrice', 'offerPrice', 'startsAt', 'expiresAt', 'testIds', 'eligibility', 'createdAt', 'usedCount'])
+        && data.keys().hasOnly(['ownerId', 'id', 'title', 'description', 'type', 'discountType', 'discountValue', 'originalPrice', 'offerPrice', 'startsAt', 'expiresAt', 'testIds', 'eligibility', 'createdAt', 'usedCount'])
+        && validCustomerString(data.ownerId, 1, 128) && data.ownerId == uid
+        && data.id is string && data.id.size() == 46 && data.id == id
+        && data.id.matches('^BPL-OFFER-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+        && validCustomerString(data.title, 3, 120)
+        && validCustomerString(data.description, 5, 1500)
+        && data.type in ['Percentage Discount', 'Fixed Amount Discount', 'Full Body Checkup', 'Festival Offer', 'Seasonal Offer', 'Senior Citizen Offer', 'New Customer Offer', 'Repeat Customer Offer', 'Referral Offer']
+        && data.discountType in ['percentage', 'fixed']
+        && validScopedOfferPrice(data)
+        && data.startsAt is timestamp && data.expiresAt is timestamp && data.expiresAt > data.startsAt
+        && validOfferCatalogIds(data.testIds)
+        && data.eligibility in ['all', 'senior', 'new', 'repeat', 'referral']
+        && recentCustomerTime(data.createdAt)
+        && data.usedCount is int && data.usedCount == 0;
+    }
+    match /bpl_customerWorkspaces/{uid}/tests/{id} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && isValidCatalogEntry(request.resource.data, uid, id)
+        && recentCustomerTime(request.resource.data.createdAt);
+      allow update: if isOwner(uid) && isValidCatalogEntry(request.resource.data, uid, id)
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false;
+    }
+    match /bpl_customerWorkspaces/{uid}/offers/{id} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && isValidScopedOffer(request.resource.data, uid, id);
+      allow update, delete: if false;
+    }
+    // Conversations and messages contain private phone numbers and message bodies.
+    // Their statuses and inboxStatus metadata are written only by the trusted
+    // service after API authorization or Meta signature verification. No secrets
+    // are stored in these readable documents. Auxiliary sendRequests stay denied.
+    match /bpl_customerWorkspaces/{uid}/conversations/{conversationId} {
+      allow read: if isOwner(uid);
+      allow create, update, delete: if false;
+      match /messages/{messageId} {
+        allow read: if isOwner(uid);
+        allow create, update, delete: if false;
+      }
+    }
+    match /bpl_customerWorkspaces/{uid}/inboxStatus/{statusId} {
+      allow read: if isOwner(uid);
+      allow create, update, delete: if false;
+    }
+    // This module uses Admin SDK server endpoints. No client patient/campaign access.
+    // Merge these namespaced rules with existing portal rules; do not replace them.
+    match /{collection}/{document=**} {
+      allow read, write: if !collection.matches('bpl_.*') && false;
+    }
+  }
+}

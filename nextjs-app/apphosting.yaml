@@ -1,0 +1,73 @@
+# Firebase App Hosting alternative to Docker. Configure these named secrets in
+# the EXISTING Firebase project's Secret Manager before creating a rollout.
+runConfig:
+  minInstances: 0
+  maxInstances: 3
+  concurrency: 40
+  cpu: 1
+  memoryMiB: 1024
+
+env:
+  - variable: FIREBASE_USE_ADC
+    value: 'true'
+    availability: [RUNTIME]
+  - variable: FIREBASE_PROJECT_ID
+    secret: bpl-firebase-project-id
+    availability: [RUNTIME]
+  - variable: FIREBASE_STORAGE_BUCKET
+    secret: bpl-firebase-storage-bucket
+    availability: [RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    secret: bpl-firebase-web-api-key
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    secret: bpl-firebase-auth-domain
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    secret: bpl-firebase-project-id
+    availability: [BUILD, RUNTIME]
+  - variable: APP_URL
+    secret: bpl-app-url
+    availability: [RUNTIME]
+  - variable: LAB_PHONE
+    secret: bpl-lab-phone
+    availability: [RUNTIME]
+  - variable: WHATSAPP_ACCESS_TOKEN
+    secret: bpl-whatsapp-access-token
+    availability: [RUNTIME]
+  - variable: WHATSAPP_PHONE_NUMBER_ID
+    secret: bpl-whatsapp-phone-number-id
+    availability: [RUNTIME]
+  - variable: WHATSAPP_BUSINESS_ACCOUNT_ID
+    secret: bpl-whatsapp-business-account-id
+    availability: [RUNTIME]
+  - variable: WHATSAPP_APP_SECRET
+    secret: bpl-whatsapp-app-secret
+    availability: [RUNTIME]
+  - variable: WHATSAPP_VERIFY_TOKEN
+    secret: bpl-whatsapp-verify-token
+    availability: [RUNTIME]
+  - variable: WHATSAPP_GRAPH_VERSION
+    value: v23.0
+    availability: [RUNTIME]
+  - variable: WHATSAPP_MARKETING_RATE_PAISE
+    secret: bpl-whatsapp-marketing-rate-paise
+    availability: [RUNTIME]
+  - variable: WHATSAPP_DAILY_LIMIT
+    value: '1000'
+    availability: [RUNTIME]
+  - variable: WHATSAPP_BATCH_SIZE
+    value: '20'
+    availability: [RUNTIME]
+  - variable: CRON_SECRET
+    secret: bpl-cron-secret
+    availability: [RUNTIME]
+  - variable: PUBLIC_RATE_LIMIT_SECRET
+    secret: bpl-public-rate-limit-secret
+    availability: [RUNTIME]
+  - variable: SCHEDULER_SERVICE_ACCOUNT
+    secret: bpl-scheduler-service-account
+    availability: [RUNTIME]
+  - variable: WORKER_OIDC_AUDIENCE
+    secret: bpl-worker-oidc-audience
+    availability: [RUNTIME]
