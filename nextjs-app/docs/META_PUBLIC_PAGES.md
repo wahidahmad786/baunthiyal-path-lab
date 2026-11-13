@@ -13,7 +13,7 @@ The Meta app owner must enter the URLs in the corresponding app settings and com
 
 ## Token and template diagnosis
 
-A read-only Meta audit on 13 November 2026 returned error code **190** for the currently saved access token. No promotional message was sent. Meta app Live mode still requires an authorized access token; changing mode does not revive an expired/revoked token. Generate an appropriate replacement through the owner's Meta Business settings and save it only in the authenticated WhatsApp Integration page.
+An earlier read-only Meta audit on 13 November 2026 returned error code **190** for the token saved at that time. After the owner's token replacement, a later audit confirmed a valid token with WhatsApp messaging and management permissions. No promotional message was sent. Meta app Live mode still requires an authorized access token; changing mode does not revive an expired/revoked token. Generate replacements through the owner's Meta Business settings and save them only in the authenticated WhatsApp Integration page.
 
 The campaign dropdown uses real Meta template records. Approved marketing templates with fixed text headers or image headers are supported. Branding and STOP instructions can be in approved headers, body or footer. Unsupported approved templates are listed with reasons; pending and rejected counts remain distinct. No placeholder is presented as a Meta-approved template.
 

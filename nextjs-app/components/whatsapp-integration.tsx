@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { labClientAuth } from '@/lib/client-auth';
 import type { ConnectionSummary } from '@/lib/whatsapp-connection';
+import { metaTestSender } from '@/lib/chat-reply-state';
 import { Field, Notice } from './ui';
 
 const empty = {
@@ -157,12 +158,27 @@ export default function WhatsAppIntegration({
           {verificationFailed
             ? 'Needs verification'
             : saved?.verifiedAt
-              ? 'Previously verified'
+              ? 'Verified at last check'
               : saved
                 ? 'Saved · Not verified'
                 : 'Not connected'}
         </span>
       </div>
+      {saved?.verifiedAt && !verificationFailed && (
+        <p className="connection-check-note">
+          Last credential check:{' '}
+          {new Date(saved.verifiedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}. This
+          verifies saved API details; free-text replies still require a customer message within the
+          last 24 hours.
+        </p>
+      )}
+      {saved && metaTestSender(saved.phone, saved.verifiedName) && (
+        <Notice>
+          API sending number: {saved.phone} — Meta test number. Changing the phone field here does
+          not register your lab number with Meta. Use supported Coexistence onboarding to keep using
+          its WhatsApp Business mobile app.
+        </Notice>
+      )}
       <div className="integration-layout">
         <section className="panel integration-form">
           <div className="panel-heading">

@@ -19,6 +19,7 @@ The hosted portal corresponds to source commit `ae90432f52c08d6596632c9c5af5458a
 
 - Google/Firebase sign-in and account-scoped customer/catalog/offer/integration APIs are implemented. The reference library contains 439 tests; reference entries have no invented prices.
 - The inbox shows records received by the API and provides customer WhatsApp links. It does not import historical mobile WhatsApp chats.
+- The current Meta test sender and per-customer 24-hour reply restrictions are shown explicitly. The requested app's WABA event subscription was added after current token permissions were confirmed; see `nextjs-app/docs/WHATSAPP_REPLY_REQUIREMENTS.md` for the operational requirements.
 - The current callback receiver is the signed `/webhook/<account-uid>` route on the public Render app, enabled for the owner's callback repair request. It validates the saved verification token for challenges and the Meta HMAC signature for events. The original separate callback Site remains private. Meta subscription and valid API credentials are still required; public receiver readiness alone is not a claim that messaging is connected.
 - Campaign dispatch, scheduling and other full Node backend operations in `nextjs-app` are not all deployed on the hosted Worker portal. The UI must continue to reflect actual backend availability.
 - Firebase remains on Spark/free. No paid Firebase backend upgrade is included or enabled by this export.

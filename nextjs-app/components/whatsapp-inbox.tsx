@@ -27,6 +27,7 @@ import type {
 } from '@/lib/chat-types';
 import { labClientAuth } from '@/lib/client-auth';
 import { accountApi } from './ui';
+import { replyBlockFor } from '@/lib/chat-reply-state';
 import styles from './whatsapp-inbox.module.css';
 
 type InboxResponse = ChatInboxResponse;
@@ -284,6 +285,19 @@ export default function WhatsAppInbox({
   const canReply = configured && windowOpen && !!activeContact && !detailError;
   const webhookUrl = detail?.webhookUrl || inbox?.webhookUrl;
   const reason = detail?.reason || inbox?.reason;
+  const senderPhone = detail?.senderPhone || inbox?.senderPhone;
+  const testSender = detail?.testSender ?? inbox?.testSender ?? false;
+  const replyBlock =
+    detail?.replyBlock ||
+    (!canReply
+      ? replyBlockFor({
+          configured,
+          windowOpen,
+          hasInbound: !!detail?.conversation.lastInboundAt,
+          reason,
+          senderPhone,
+        })
+      : null);
 
   async function sendMessage() {
     const id = selected;
@@ -377,6 +391,29 @@ export default function WhatsAppInbox({
         <div className={styles.error} role="alert">
           <AlertCircle size={16} />
           <span>{inboxError}</span>
+        </div>
+      )}
+      {senderPhone && (
+        <div
+          className={`${styles.senderStatus} ${testSender ? styles.testSender : ''}`}
+          role="status"
+        >
+          <div>
+            <strong>API sending number: {senderPhone}</strong>
+            <span>
+              {testSender ? 'Meta test number' : inbox?.senderName || 'Connected business number'}
+            </span>
+          </div>
+          <p>
+            {testSender
+              ? 'This API is connected to a Meta test number. It supports the test recipients added in Meta, and is not your lab’s mobile WhatsApp number. To use your lab number while keeping its WhatsApp Business app, use supported Coexistence onboarding.'
+              : 'API messages use this number. A verified connection does not open a reply window for every customer.'}
+          </p>
+          {onOpenIntegration && (
+            <button className="text-button" type="button" onClick={onOpenIntegration}>
+              View connected number
+            </button>
+          )}
         </div>
       )}
       {inbox && !inbox.configured && (
@@ -633,22 +670,24 @@ export default function WhatsAppInbox({
                   </div>
                 )}
                 {!canReply && !detailLoading && (
-                  <div className={styles.replyNote}>
+                  <div className={styles.replyNote} id="whatsapp-reply-requirement" role="status">
                     <Clock3 size={15} />
                     <span>
-                      {!configured
-                        ? reason || 'Connect live WhatsApp messages to reply from this inbox.'
-                        : !windowOpen
-                          ? 'Portal replies are available for 24 hours after a customer messages you. Outside this window, use an approved template or open WhatsApp.'
-                          : 'Refresh this conversation before sending a reply.'}
+                      <strong>{replyBlock?.title || 'API reply unavailable'}</strong>
+                      {replyBlock?.message || 'Refresh this conversation before sending a reply.'}
                     </span>
                   </div>
                 )}
                 <div className={styles.composerInput}>
                   <textarea
                     aria-label="WhatsApp reply"
+                    aria-describedby={
+                      !canReply && !detailLoading ? 'whatsapp-reply-requirement' : undefined
+                    }
                     placeholder={
-                      canReply ? 'Type a reply…' : 'Write a message to open in WhatsApp…'
+                      canReply
+                        ? 'Type an API reply…'
+                        : 'Draft a message for the WhatsApp app (API reply unavailable)…'
                     }
                     value={text}
                     maxLength={4096}
@@ -675,15 +714,22 @@ export default function WhatsAppInbox({
                     className={styles.sendButton}
                     disabled={!canReply || !text.trim() || sending}
                     aria-label="Send WhatsApp reply"
-                    title={
-                      !canReply
-                        ? 'See the connection or reply-window requirement above.'
-                        : 'Send reply'
-                    }
+                    title={!canReply ? replyBlock?.title || 'API reply unavailable' : 'Send reply'}
                   >
                     {sending ? <LoaderCircle className="spin" size={20} /> : <Send size={20} />}
                   </button>
                 </div>
+                {!canReply && activeContact && text.trim() && (
+                  <a
+                    className={`button secondary small-button ${styles.manualDraft}`}
+                    href={chatLink(activeContact.phone, text.trim())}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <ExternalLink size={14} />
+                    Open WhatsApp app with this draft
+                  </a>
+                )}
                 <small>
                   Delivery and read ticks come from WhatsApp. Opening the app does not mark a
                   message as sent here.

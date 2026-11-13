@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { allowedRequestOrigin } from './request-origin';
+import { metaTestSender, replyBlockFor } from './chat-reply-state';
+import { metaReplyError } from './meta-reply-error';
 import {
   decryptConnection,
   type ConnectionRecord,
@@ -281,6 +283,10 @@ function inboxConfiguration(
             : null;
   return {
     configured: !reason,
+    senderPhone: connection?.phone || null,
+    senderName: connection?.verifiedName || '',
+    testSender: metaTestSender(connection?.phone || '', connection?.verifiedName || ''),
+    connectionVerifiedAt: connection?.verifiedAt || null,
     reason,
     webhookUrl,
     connectionVerified: !!connection?.verifiedAt,
@@ -386,6 +392,8 @@ export async function handleAccountChat(
     );
     if (request.method === 'GET' && !match[2]) {
       const listed = await store.list(`conversations/${id}/messages`, 'createdAt desc', 100);
+      const matchingSender = existing?.data.phoneNumberId === connection?.phoneNumberId;
+      const windowOpen = matchingSender && chatWindowOpen(conversation.lastInboundAt);
       const result: ChatDetailResponse = {
         ...configuration,
         conversation,
@@ -393,9 +401,14 @@ export async function handleAccountChat(
           .map((doc) => messageFrom(doc.data, doc.name.split('/').pop()!))
           .reverse(),
         recorded: listed.docs.length > 0,
-        windowOpen:
-          existing?.data.phoneNumberId === connection?.phoneNumberId &&
-          chatWindowOpen(conversation.lastInboundAt),
+        windowOpen,
+        replyBlock: replyBlockFor({
+          configured: configuration.configured,
+          windowOpen,
+          hasInbound: matchingSender && !!conversation.lastInboundAt,
+          reason: configuration.reason,
+          senderPhone: configuration.senderPhone,
+        }),
         truncated: listed.truncated,
       };
       return chatJson(result);
@@ -519,11 +532,7 @@ export async function handleAccountChat(
       if (!response.ok) {
         invalidToken = [190, 102, 104].includes(Number(result.error?.code));
         uncertain = response.status >= 500;
-        safeError = invalidToken
-          ? 'Meta rejected the saved access token. Update it in WhatsApp Integration and verify it.'
-          : uncertain
-            ? 'Meta did not confirm whether this message was accepted. Check its status before sending again.'
-            : 'Meta rejected this message. Check the WhatsApp account and reply window.';
+        safeError = metaReplyError(Number(result.error?.code), uncertain);
       } else if (typeof result.messages?.[0]?.id === 'string') metaId = result.messages[0].id;
       else {
         uncertain = true;

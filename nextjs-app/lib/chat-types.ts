@@ -34,7 +34,16 @@ export type ChatEnvironment = {
   webhookBaseUrl?: string;
   webhookPublicReady?: boolean;
 };
+export type ChatReplyBlock = {
+  code: 'CONNECTION_REQUIRED' | 'CUSTOMER_MESSAGE_REQUIRED' | 'REPLY_WINDOW_EXPIRED';
+  title: string;
+  message: string;
+};
 export type ChatInboxResponse = {
+  senderPhone: string | null;
+  senderName: string;
+  testSender: boolean;
+  connectionVerifiedAt: string | null;
   conversations: ChatConversation[];
   configured: boolean;
   webhookUrl: string | null;
@@ -47,6 +56,11 @@ export type ChatInboxResponse = {
   truncated?: boolean;
 };
 export type ChatDetailResponse = {
+  senderPhone: string | null;
+  senderName: string;
+  testSender: boolean;
+  connectionVerifiedAt: string | null;
+  replyBlock: ChatReplyBlock | null;
   conversation: ChatConversation;
   messages: ChatMessage[];
   recorded: boolean;

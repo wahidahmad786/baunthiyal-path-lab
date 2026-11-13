@@ -547,9 +547,9 @@ export default function Dashboard() {
             />
             <span className="top-status">
               {ready && config?.whatsapp
-                ? 'WhatsApp connected'
+                ? 'WhatsApp API configured'
                 : whatsappVerified
-                  ? 'Credentials verified'
+                  ? 'API credentials checked'
                   : 'WhatsApp Business'}
             </span>
             <div className="top-divider" />

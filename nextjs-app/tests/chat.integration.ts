@@ -202,6 +202,9 @@ test('inbox is authenticated, owner isolated and truthful before any provider me
   assert.equal(detail.recorded, false);
   assert.equal(detail.windowOpen, false);
   assert.equal(detail.configured, false);
+  assert.equal(detail.senderPhone, credentials.phone);
+  assert.equal(detail.testSender, false);
+  assert.equal(detail.replyBlock.code, 'CONNECTION_REQUIRED');
   assert.equal(
     (await handleAccountChat(request('/' + id, undefined, other), env, transport)).status,
     404,
@@ -281,6 +284,21 @@ test('callback verifies token/signature and records actual inbound messages idem
     transport,
   );
   assert.equal(await verified.text(), '123');
+  const beforeInbound = await (await handleAccountChat(request('/' + id), env, transport)).json();
+  assert.equal(beforeInbound.configured, true);
+  assert.equal(beforeInbound.windowOpen, false);
+  assert.equal(beforeInbound.replyBlock.code, 'CUSTOMER_MESSAGE_REQUIRED');
+  const closed = await handleAccountChat(
+    request('/' + id + '/send', {
+      text: 'Cannot initiate free text',
+      requestId: crypto.randomUUID(),
+    }),
+    env,
+    transport,
+  );
+  assert.equal(closed.status, 409);
+  assert.equal((await closed.json()).code, 'WHATSAPP_WINDOW_CLOSED');
+  assert.equal(metaCalls, 0, 'No provider send is attempted before a signed customer message');
   const inbound = {
     messages: [
       {
@@ -301,6 +319,7 @@ test('callback verifies token/signature and records actual inbound messages idem
   assert.equal(detail.messages[0].status, 'received');
   assert.equal(detail.windowOpen, true);
   assert.equal(detail.configured, true);
+  assert.equal(detail.replyBlock, null);
   assert.equal(detail.conversation.unreadCount, 1);
   const hidden = JSON.stringify(detail);
   for (const secret of [credentials.accessToken, credentials.appSecret, credentials.verifyToken])
