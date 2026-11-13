@@ -23,7 +23,7 @@ Signed-in users can select a PNG/JPEG up to 5 MB. The browser re-encodes the ima
 
 Direct client access to the new banner collection remains denied by the existing default-deny rules. The server derives the owner UID from verified Firebase identity; it does not accept an owner UID from the upload. No Storage bucket, paid Firebase upgrade, local Render filesystem persistence or public asset endpoint was introduced.
 
-The full administrator sender can upload a stored banner to Meta's media endpoint and send its returned media ID for an approved image-header template. Global campaign dispatch remains subject to its existing backend, consent, template, scheduling and callback checks. The owner's separate incoming-message callback remains private.
+The full administrator sender can upload a stored banner to Meta's media endpoint and send its returned media ID for an approved image-header template. Global campaign dispatch remains subject to its existing backend, consent, template, scheduling and callback checks. The original separate callback Site remains private. For the owner's later callback repair request, the public Render app now exposes a token/signature-checked `/webhook/<account-uid>` receiver; the integration page provides its exact URL and an authenticated action to copy the saved verification token.
 
 ## Verification
 

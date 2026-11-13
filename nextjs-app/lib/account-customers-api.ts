@@ -1,11 +1,13 @@
 import type { Customer } from './domain';
 import { customerConsentSchema, customerInputSchema } from './customer-input';
+import { allowedRequestOrigin } from './request-origin';
 
 export type AccountCustomerEnvironment = {
   projectId: string;
   apiKey: string;
   authOrigin?: string;
   firestoreOrigin?: string;
+  appOrigin?: string;
 };
 
 type FirestoreValue = {
@@ -95,7 +97,7 @@ export async function handleAccountCustomers(
   try {
     if (!['GET', 'POST'].includes(request.method))
       return json({ error: 'Method not allowed' }, 405);
-    if (request.method === 'POST' && request.headers.get('origin') !== new URL(request.url).origin)
+    if (request.method === 'POST' && !allowedRequestOrigin(request, env.appOrigin))
       throw new CustomerError(403, 'Request origin is not allowed');
     const authorization = request.headers.get('authorization') || '';
     const token =

@@ -19,7 +19,7 @@ The hosted portal corresponds to source commit `ae90432f52c08d6596632c9c5af5458a
 
 - Google/Firebase sign-in and account-scoped customer/catalog/offer/integration APIs are implemented. The reference library contains 439 tests; reference entries have no invented prices.
 - The inbox shows records received by the API and provides customer WhatsApp links. It does not import historical mobile WhatsApp chats.
-- The callback is private and `WHATSAPP_WEBHOOK_PUBLIC_READY=false`. New Meta callbacks and live inbox replies are inactive until the owner explicitly enables public callback access, completes Meta subscription and supplies valid runtime credentials.
+- The current callback receiver is the signed `/webhook/<account-uid>` route on the public Render app, enabled for the owner's callback repair request. It validates the saved verification token for challenges and the Meta HMAC signature for events. The original separate callback Site remains private. Meta subscription and valid API credentials are still required; public receiver readiness alone is not a claim that messaging is connected.
 - Campaign dispatch, scheduling and other full Node backend operations in `nextjs-app` are not all deployed on the hosted Worker portal. The UI must continue to reflect actual backend availability.
 - Firebase remains on Spark/free. No paid Firebase backend upgrade is included or enabled by this export.
 - This repository contains the implementation built in this workspace. No original external diagnostic portal repository was available; existing external patient reports, staff and financial systems were not imported.

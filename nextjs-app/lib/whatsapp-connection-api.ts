@@ -8,6 +8,7 @@ import {
   type ConnectionRecord,
 } from './whatsapp-connection';
 import { loadMarketingTemplates, MetaTemplateError } from './meta-marketing-templates';
+import { allowedRequestOrigin } from './request-origin';
 
 export type ConnectionEnvironment = {
   projectId: string;
@@ -16,6 +17,9 @@ export type ConnectionEnvironment = {
   graphVersion?: string;
   authOrigin?: string;
   firestoreOrigin?: string;
+  appOrigin?: string;
+  webhookBaseUrl?: string;
+  webhookPublicReady?: boolean;
 };
 class ConnectionError extends Error {
   constructor(
@@ -35,13 +39,16 @@ export async function handleWhatsAppConnection(
   send: typeof fetch = fetch,
 ): Promise<Response> {
   try {
-    const templateRequest =
-      new URL(request.url).pathname.replace(/\/$/, '') === '/api/whatsapp/integration/templates';
+    const path = new URL(request.url).pathname.replace(/\/$/, '');
+    const templateRequest = path === '/api/whatsapp/integration/templates';
+    const verificationTokenRequest = path === '/api/whatsapp/integration/verification-token';
+    if (verificationTokenRequest && request.method !== 'POST')
+      return json({ error: 'Method not allowed' }, 405);
     if (templateRequest && request.method !== 'GET')
       return json({ error: 'Method not allowed' }, 405);
     if (!['GET', 'POST'].includes(request.method))
       return json({ error: 'Method not allowed' }, 405);
-    if (request.method === 'POST' && request.headers.get('origin') !== new URL(request.url).origin)
+    if (request.method === 'POST' && !allowedRequestOrigin(request, env.appOrigin))
       throw new ConnectionError(403, 'Request origin is not allowed');
     const token = request.headers.get('authorization')?.match(/^Bearer (\S+)$/)?.[1];
     if (!token)
@@ -122,8 +129,33 @@ export async function handleWhatsAppConnection(
         );
       }
     }
+    function webhook(record: ConnectionRecord | null) {
+      let callbackUrl: string | null = null;
+      if (env.webhookBaseUrl) {
+        const base = new URL(env.webhookBaseUrl);
+        if (base.protocol === 'https:')
+          callbackUrl = `${base.origin}/webhook/${encodeURIComponent(uid)}`;
+      }
+      return {
+        callbackUrl,
+        publicReady: env.webhookPublicReady === true,
+        verifyTokenSaved: !!record?.verifyToken,
+      };
+    }
+    if (verificationTokenRequest) {
+      if (!previous?.verifyToken)
+        throw new ConnectionError(
+          409,
+          'Enter a webhook verification token and choose Save details first.',
+        );
+      // Explicit authenticated owner action; access tokens and app secrets are never returned.
+      return json({ verifyToken: previous.verifyToken });
+    }
     if (request.method === 'GET')
-      return json({ connection: previous ? connectionSummary(previous) : null });
+      return json({
+        connection: previous ? connectionSummary(previous) : null,
+        webhook: webhook(previous),
+      });
     const text = await request.text();
     if (text.length > 16000) throw new ConnectionError(413, 'Connection details are too large.');
     const parsed = connectionSchema.safeParse(JSON.parse(text));
@@ -177,6 +209,7 @@ export async function handleWhatsAppConnection(
       );
     return json({
       connection: connectionSummary(record),
+      webhook: webhook(record),
       message: input.verify
         ? 'Meta verified your WhatsApp credentials. Connection saved.'
         : 'Connection details saved securely. Verify with Meta before sending.',

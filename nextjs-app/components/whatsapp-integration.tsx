@@ -37,10 +37,15 @@ export default function WhatsAppIntegration({
     setSiteOrigin(window.location.origin);
   }, []);
   const [verificationFailed, setVerificationFailed] = useState(false);
-  async function request(data?: unknown) {
+  const [webhook, setWebhook] = useState<{
+    callbackUrl: string | null;
+    publicReady: boolean;
+    verifyTokenSaved: boolean;
+  } | null>(null);
+  async function request(data?: unknown, suffix = '') {
     const user = labClientAuth().currentUser;
     if (!user) throw new Error('Sign in with Google to manage your connection.');
-    const response = await fetch('/api/whatsapp/integration', {
+    const response = await fetch('/api/whatsapp/integration' + suffix, {
       method: data === undefined ? 'GET' : 'POST',
       headers: {
         Authorization: `Bearer ${await user.getIdToken()}`,
@@ -51,7 +56,12 @@ export default function WhatsAppIntegration({
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Unable to save connection details.');
-    return result as { connection: ConnectionSummary | null; message?: string };
+    return result as {
+      connection: ConnectionSummary | null;
+      message?: string;
+      webhook?: { callbackUrl: string | null; publicReady: boolean; verifyTokenSaved: boolean };
+      verifyToken?: string;
+    };
   }
   useEffect(() => {
     let active = true;
@@ -59,6 +69,7 @@ export default function WhatsAppIntegration({
       .then((result) => {
         if (!active) return;
         setSaved(result.connection);
+        setWebhook(result.webhook || null);
         if (result.connection) {
           const { phone, phoneNumberId, businessAccountId, appId } = result.connection;
           setValues({ ...empty, phone, phoneNumberId, businessAccountId, appId });
@@ -90,6 +101,7 @@ export default function WhatsAppIntegration({
         verify,
       });
       setSaved(result.connection);
+      setWebhook(result.webhook || null);
       setVerificationFailed(false);
       setValues((current) => ({ ...current, accessToken: '', appSecret: '', verifyToken: '' }));
       setNotice(result.message || 'Connection saved.');
@@ -101,6 +113,32 @@ export default function WhatsAppIntegration({
         setVerificationFailed(true);
         onConnectionChange?.(false);
       }
+    } finally {
+      setBusy('');
+    }
+  }
+  async function copyWebhookValue(kind: 'url' | 'token') {
+    setBusy('copy');
+    setError('');
+    setNotice('');
+    try {
+      const text =
+        kind === 'url'
+          ? webhook?.callbackUrl
+          : (await request({}, '/verification-token')).verifyToken;
+      if (!text) throw new Error('Save your callback verification token in account details first.');
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else
+        throw new Error(
+          'Clipboard access is unavailable. Open this page over HTTPS in your browser.',
+        );
+      setNotice(
+        kind === 'url'
+          ? 'Callback URL copied. Paste it into Meta’s callback URL field.'
+          : 'Saved verification token copied. Paste it into Meta’s Verify token field.',
+      );
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Unable to copy this value.');
     } finally {
       setBusy('');
     }
@@ -244,7 +282,7 @@ export default function WhatsAppIntegration({
                 </Field>
                 <Field
                   label="Webhook verification token"
-                  hint="Use the same verification token when subscribing your messaging backend’s callback in Meta."
+                  hint="Choose a verification token and Save details first. Then use Copy saved verify token below so Meta and the server use the same value."
                 >
                   <input
                     type="password"
@@ -259,11 +297,30 @@ export default function WhatsAppIntegration({
                     }
                   />
                 </Field>
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={!!busy}
+                  onClick={() => {
+                    const random = crypto.getRandomValues(new Uint8Array(32));
+                    update(
+                      'verifyToken',
+                      Array.from(random, (b) => b.toString(16).padStart(2, '0')).join(''),
+                    );
+                    setNotice(
+                      'A new verification token is filled in. Choose Save details before copying it to Meta.',
+                    );
+                  }}
+                >
+                  Generate a verification token
+                </button>
               </div>
               <div className="integration-privacy">
                 <ShieldCheck size={16} />
                 <span>
-                  Tokens are encrypted before storage and are never returned to your browser.
+                  API access tokens and app secrets are encrypted and never returned to the browser.
+                  Your saved callback verification token can be copied only through your
+                  authenticated account.
                 </span>
               </div>
               <div className="integration-actions">
@@ -287,6 +344,55 @@ export default function WhatsAppIntegration({
                 </button>
               </div>
             </form>
+          )}
+          {!loading && (
+            <div className="callback-setup">
+              <h3>Meta webhook callback</h3>
+              <p>
+                Choose Save details first. Copy both saved values below into Meta, then choose
+                Verify and save there and subscribe to the messages field.
+              </p>
+              {webhook?.callbackUrl ? (
+                <>
+                  <Field
+                    label="Callback URL"
+                    hint="Use this exact address, including your account identifier."
+                  >
+                    <input
+                      readOnly
+                      value={webhook.callbackUrl}
+                      onFocus={(e) => e.currentTarget.select()}
+                    />
+                  </Field>
+                  <div className="inline-actions callback-copy-actions">
+                    <button
+                      className="button secondary small-button"
+                      type="button"
+                      disabled={!!busy}
+                      onClick={() => void copyWebhookValue('url')}
+                    >
+                      Copy callback URL
+                    </button>
+                    <button
+                      className="button secondary small-button"
+                      type="button"
+                      disabled={!!busy || !webhook.verifyTokenSaved || !!values.verifyToken}
+                      onClick={() => void copyWebhookValue('token')}
+                    >
+                      Copy saved verify token
+                    </button>
+                  </div>
+                  {!webhook.publicReady && (
+                    <Notice>
+                      The callback is not publicly activated yet. Meta cannot verify a private
+                      callback.
+                    </Notice>
+                  )}
+                </>
+              ) : (
+                <Notice>The callback URL is not configured yet.</Notice>
+              )}
+            </div>
           )}
         </section>
         <aside className="panel integration-help">

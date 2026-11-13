@@ -30,6 +30,7 @@ export type ChatEnvironment = {
   serviceAccountJson?: string;
   authOrigin?: string;
   firestoreOrigin?: string;
+  appOrigin?: string;
   webhookBaseUrl?: string;
   webhookPublicReady?: boolean;
 };

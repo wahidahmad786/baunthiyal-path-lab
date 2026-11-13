@@ -3581,3 +3581,25 @@ tbody tr:hover {
   border-radius: 5px;
   color: #527275;
 }
+
+.callback-setup {
+  border-top: 1px solid #e1ecec;
+  margin-top: 24px;
+  padding-top: 24px;
+}
+.callback-setup h3 {
+  font-size: 15px;
+  color: #23464a;
+}
+.callback-setup > p {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #6d8588;
+}
+.callback-setup .field {
+  margin: 15px 0;
+}
+.callback-copy-actions {
+  flex-wrap: wrap;
+  gap: 10px;
+}

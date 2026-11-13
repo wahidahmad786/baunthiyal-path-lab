@@ -1,12 +1,14 @@
 import { z } from 'zod';
 import { offerSchema, finalPrice, type Offer } from './domain';
 import { REFERENCE_TESTS } from './test-reference';
+import { allowedRequestOrigin } from './request-origin';
 
 export type AccountCatalogEnvironment = {
   projectId: string;
   apiKey: string;
   authOrigin?: string;
   firestoreOrigin?: string;
+  appOrigin?: string;
 };
 export type AccountCatalogEntry = {
   id: string;
@@ -128,7 +130,7 @@ export async function handleAccountCatalog(
   try {
     if (!['GET', 'POST'].includes(request.method))
       return json({ error: 'Method not allowed' }, 405);
-    if (request.method === 'POST' && request.headers.get('origin') !== new URL(request.url).origin)
+    if (request.method === 'POST' && !allowedRequestOrigin(request, env.appOrigin))
       throw new CatalogError(403, 'Request origin is not allowed');
     const authorization = request.headers.get('authorization') || '';
     const token =

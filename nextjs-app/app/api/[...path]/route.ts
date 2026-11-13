@@ -50,7 +50,7 @@ import { handleWhatsAppConnection } from '@/lib/whatsapp-connection-api';
 import { handleAccountCatalog } from '@/lib/account-catalog-api';
 import { handleAccountBanners } from '@/lib/account-banners-api';
 import { handleAccountChat } from '@/lib/account-chat-api';
-import { readFileSync } from 'node:fs';
+import { accountEnvironment } from '@/lib/server/account-environment';
 import { handleAccountCustomers } from '@/lib/account-customers-api';
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -58,51 +58,19 @@ export const dynamic = 'force-dynamic';
 type Context = { params: Promise<{ path: string[] }> };
 const idSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,150}$/);
 function accountConnection(request: Request) {
-  return handleWhatsAppConnection(request, {
-    projectId: process.env.FIREBASE_PROJECT_ID || '',
-    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
-    encryptionKey: process.env.WHATSAPP_CONNECTION_ENCRYPTION_KEY || '',
-    graphVersion: process.env.WHATSAPP_GRAPH_VERSION,
-  });
+  return handleWhatsAppConnection(request, accountEnvironment());
 }
 function accountCustomersRequest(request: Request) {
-  return handleAccountCustomers(request, {
-    projectId: process.env.FIREBASE_PROJECT_ID || '',
-    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
-  });
+  return handleAccountCustomers(request, accountEnvironment());
 }
 function accountCatalogRequest(request: Request) {
-  return handleAccountCatalog(request, {
-    projectId: process.env.FIREBASE_PROJECT_ID || '',
-    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
-  });
+  return handleAccountCatalog(request, accountEnvironment());
 }
 function accountInboxRequest(request: Request) {
-  const serviceAccountJson =
-    process.env.WHATSAPP_SERVICE_ACCOUNT_JSON ||
-    (process.env.WHATSAPP_SERVICE_ACCOUNT_FILE
-      ? readFileSync(process.env.WHATSAPP_SERVICE_ACCOUNT_FILE, 'utf8')
-      : '');
-  return handleAccountChat(request, {
-    projectId: process.env.FIREBASE_PROJECT_ID || '',
-    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
-    encryptionKey: process.env.WHATSAPP_CONNECTION_ENCRYPTION_KEY || '',
-    graphVersion: process.env.WHATSAPP_GRAPH_VERSION,
-    serviceAccountJson,
-    webhookBaseUrl: process.env.WHATSAPP_WEBHOOK_BASE_URL,
-    webhookPublicReady: process.env.WHATSAPP_WEBHOOK_PUBLIC_READY === 'true',
-  });
+  return handleAccountChat(request, accountEnvironment(true));
 }
 function accountBannerRequest(request: Request) {
-  return handleAccountBanners(request, {
-    projectId: process.env.FIREBASE_PROJECT_ID || '',
-    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
-    serviceAccountJson:
-      process.env.WHATSAPP_SERVICE_ACCOUNT_JSON ||
-      (process.env.WHATSAPP_SERVICE_ACCOUNT_FILE
-        ? readFileSync(process.env.WHATSAPP_SERVICE_ACCOUNT_FILE, 'utf8')
-        : ''),
-  });
+  return handleAccountBanners(request, accountEnvironment(true));
 }
 async function body(request: Request) {
   const text = await request.text();
@@ -140,7 +108,11 @@ export async function GET(request: NextRequest, context: Context) {
     if (p[0] === 'account' && (p[1] === 'catalog' || p[1] === 'offers'))
       return accountCatalogRequest(request);
     if (p[0] === 'account' && p[1] === 'inbox') return accountInboxRequest(request);
-    if (key === 'whatsapp/integration' || key === 'whatsapp/integration/templates')
+    if (
+      key === 'whatsapp/integration' ||
+      key === 'whatsapp/integration/templates' ||
+      key === 'whatsapp/integration/verification-token'
+    )
       return accountConnection(request);
     if (
       key === 'account/customers' ||
@@ -249,7 +221,11 @@ export async function POST(request: NextRequest, context: Context) {
     if (p[0] === 'account' && (p[1] === 'catalog' || p[1] === 'offers'))
       return accountCatalogRequest(request);
     if (p[0] === 'account' && p[1] === 'inbox') return accountInboxRequest(request);
-    if (key === 'whatsapp/integration' || key === 'whatsapp/integration/templates')
+    if (
+      key === 'whatsapp/integration' ||
+      key === 'whatsapp/integration/templates' ||
+      key === 'whatsapp/integration/verification-token'
+    )
       return accountConnection(request);
     if (
       key === 'account/customers' ||

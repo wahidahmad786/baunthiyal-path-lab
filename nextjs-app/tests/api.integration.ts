@@ -32,6 +32,7 @@ let customerId = '';
 let bookingId = '';
 let jobId = '';
 let output = '';
+let accountBearer = '';
 async function request(
   path: string,
   body?: unknown,
@@ -66,6 +67,11 @@ before(async () => {
         NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: 'demo-bpl.firebaseapp.com',
         NEXT_PUBLIC_FIREBASE_PROJECT_ID: 'demo-bpl',
         WHATSAPP_APP_SECRET: 'api-test-app-secret',
+        WHATSAPP_CONNECTION_ENCRYPTION_KEY: 'b'.repeat(64),
+        WHATSAPP_SERVICE_ACCOUNT_FILE: '',
+        WHATSAPP_SERVICE_ACCOUNT_JSON: '',
+        WHATSAPP_WEBHOOK_BASE_URL: origin,
+        WHATSAPP_WEBHOOK_PUBLIC_READY: 'true',
         WHATSAPP_PHONE_NUMBER_ID: 'api-test-phone',
         PUBLIC_RATE_LIMIT_SECRET: 'test-only-rate-secret-32-characters-long',
         CRON_SECRET: 'test-only-worker-secret-32-characters-long',
@@ -155,6 +161,7 @@ test('Google sign-in links the pre-authorized account and server rejects other G
     const token = await credential.user.getIdTokenResult(true);
     assert.equal(token.signInProvider, 'google.com');
     assert.equal(token.claims.bplAdmin, true);
+    accountBearer = token.token;
     const login = await request('session', { idToken: token.token });
     assert.equal(login.status, 200, await login.clone().text());
     assert.match(login.headers.get('set-cookie') || '', /HttpOnly/i);
@@ -167,6 +174,59 @@ test('Google sign-in links the pre-authorized account and server rejects other G
     await signOut(clientAuth);
     await deleteClientApp(client);
   }
+});
+test('public HTTPS account saves work through the internal HTTP server and foreign origins remain blocked', async () => {
+  assert.ok(accountBearer);
+  const headers = { Authorization: `Bearer ${accountBearer}` };
+  const input = {
+    phone: '+15551869875',
+    phoneNumberId: '123456789',
+    businessAccountId: '987654321',
+    appId: '555555555',
+    accessToken: 'emulator-api-access-token-123456789',
+    appSecret: 'emulator-api-secret-123456789',
+    verifyToken: 'emulator-http-proxy-verification-token',
+    verify: false,
+  };
+  const saved = await request('whatsapp/integration', input, false, headers);
+  assert.equal(saved.status, 200, await saved.clone().text());
+  const data = await saved.json();
+  assert.equal(data.connection.verifyTokenSaved, true);
+  assert.equal(data.webhook.callbackUrl, `${origin}/webhook/google-test-lab-owner`);
+  assert.ok(!JSON.stringify(data).includes(input.verifyToken));
+  const copied = await request('whatsapp/integration/verification-token', {}, false, headers);
+  assert.equal(copied.status, 200);
+  assert.equal((await copied.json()).verifyToken, input.verifyToken);
+  const foreign = await request('whatsapp/integration', input, false, {
+    ...headers,
+    origin: 'https://attacker.example',
+  });
+  assert.equal(foreign.status, 403);
+  const customer = await request(
+    'account/customers',
+    {
+      name: 'Proxy Test Customer',
+      phone: '+919876543211',
+      marketingConsent: false,
+      consentSource: 'Emulator test only',
+      groups: [],
+    },
+    false,
+    headers,
+  );
+  assert.equal(customer.status, 201, await customer.clone().text());
+  const catalog = await request(
+    'account/catalog',
+    { name: 'Proxy Test Assay', type: 'test', price: 10000, category: 'General', aliases: [] },
+    false,
+    headers,
+  );
+  assert.equal(catalog.status, 201, await catalog.clone().text());
+  assert.equal((await fetch(base + '/webhook/google-test-lab-owner')).status, 403);
+  assert.equal(
+    (await fetch(base + '/webhook/google-test-lab-owner', { method: 'POST', body: '{}' })).status,
+    403,
+  );
 });
 test('branded page renders and all patient/campaign records require administrator access', async () => {
   const page = await fetch(base);

@@ -81,7 +81,12 @@ before(async () => {
     const record =
       uid === owner
         ? credentials
-        : { ...credentials, accessToken: 'another-owner-secret-token', verifiedAt: null };
+        : {
+            ...credentials,
+            accessToken: 'another-owner-secret-token',
+            verifyToken: 'another-owner-verification-token',
+            verifiedAt: null,
+          };
     const envelope = await encryptConnection(record, uid, env.encryptionKey);
     await db()
       .collection('bpl_whatsappConnections')
@@ -129,6 +134,57 @@ test('account template endpoint requires authentication and each caller’s own 
   assert.equal((await unverified.json()).code, 'WHATSAPP_NOT_VERIFIED');
   assert.equal((await handleWhatsAppConnection(request(owner, 'POST'), env, send)).status, 405);
   assert.deepEqual(calls, []);
+});
+test('callback values are scoped to the signed-in account and its verification token requires an explicit same-origin POST', async () => {
+  const configured = {
+    ...env,
+    appOrigin: 'https://lab.example.test',
+    webhookBaseUrl: 'https://lab.example.test',
+    webhookPublicReady: true,
+  };
+  const send = metaTransport({ data: [] });
+  const metadata = await handleWhatsAppConnection(
+    new Request('http://localhost:8080/api/whatsapp/integration', {
+      headers: { Authorization: `Bearer ${tokens[owner]}` },
+    }),
+    configured,
+    send,
+  );
+  assert.equal(metadata.status, 200);
+  const value = await metadata.json();
+  assert.equal(value.webhook.callbackUrl, `https://lab.example.test/webhook/${owner}`);
+  assert.ok(!JSON.stringify(value).includes(credentials.verifyToken));
+  const reveal = (uid?: string, origin = 'https://lab.example.test', method = 'POST') =>
+    new Request('http://localhost:8080/api/whatsapp/integration/verification-token', {
+      method,
+      headers: { origin, ...(uid ? { Authorization: `Bearer ${tokens[uid]}` } : {}) },
+    });
+  assert.equal((await handleWhatsAppConnection(reveal(), configured, send)).status, 401);
+  assert.equal(
+    (await handleWhatsAppConnection(reveal(owner, 'https://attacker.example'), configured, send))
+      .status,
+    403,
+  );
+  assert.equal(
+    (
+      await handleWhatsAppConnection(
+        reveal(owner, 'https://lab.example.test', 'GET'),
+        configured,
+        send,
+      )
+    ).status,
+    405,
+  );
+  assert.equal(
+    (await handleWhatsAppConnection(reveal(missingConnection), configured, send)).status,
+    409,
+  );
+  const copied = await handleWhatsAppConnection(reveal(owner), configured, send);
+  assert.equal(copied.status, 200);
+  assert.equal((await copied.json()).verifyToken, credentials.verifyToken);
+  assert.equal(copied.headers.get('cache-control'), 'no-store');
+  const other = await handleWhatsAppConnection(reveal(unverifiedConnection), configured, send);
+  assert.notEqual((await other.json()).verifyToken, credentials.verifyToken);
 });
 test('verified account template endpoint reads actual stored credentials and returns only real supported templates', async () => {
   const before = (

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { allowedRequestOrigin } from './request-origin';
 import {
   decryptConnection,
   type ConnectionRecord,
@@ -350,7 +351,7 @@ export async function handleAccountChat(
   try {
     if (!['GET', 'POST'].includes(request.method))
       return chatJson({ error: 'Method not allowed' }, 405);
-    if (request.method === 'POST' && request.headers.get('origin') !== new URL(request.url).origin)
+    if (request.method === 'POST' && !allowedRequestOrigin(request, env.appOrigin))
       throw new ChatError(403, 'Request origin is not allowed');
     const { uid, token } = await verifyUser(request, env, send);
     const store = await ChatStore.open(env, uid, send, token);

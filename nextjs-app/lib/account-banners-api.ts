@@ -1,5 +1,6 @@
 import { getServiceAccessToken } from './google-service-account';
 import { imageDetails, MAX_STORED_BANNER_BYTES } from './banner';
+import { allowedRequestOrigin } from './request-origin';
 
 export type BannerEnvironment = {
   projectId: string;
@@ -7,6 +8,7 @@ export type BannerEnvironment = {
   serviceAccountJson: string;
   authOrigin?: string;
   firestoreOrigin?: string;
+  appOrigin?: string;
 };
 class BannerError extends Error {
   constructor(
@@ -40,7 +42,7 @@ export async function handleAccountBanners(
       !['GET', 'POST'].includes(request.method)
     )
       return json({ error: 'Method not allowed.' }, 405);
-    if (request.method === 'POST' && request.headers.get('origin') !== new URL(request.url).origin)
+    if (request.method === 'POST' && !allowedRequestOrigin(request, env.appOrigin))
       throw new BannerError(403, 'Request origin is not allowed.');
     const authorization = request.headers.get('authorization') || '';
     const token = authorization.length < 16384 ? authorization.match(/^Bearer (\S+)$/)?.[1] : null;
