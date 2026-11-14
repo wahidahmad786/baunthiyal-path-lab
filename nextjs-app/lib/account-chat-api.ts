@@ -272,15 +272,17 @@ function inboxConfiguration(
     !!(webhookStatus?.challengeAnsweredAt || webhookStatus?.lastSignedEventAt);
   const reason = !env.serviceAccountJson
     ? 'Live inbox sending is not activated. You can still open the customer in WhatsApp.'
-    : !connection?.verifiedAt
-      ? 'Verify your WhatsApp Business connection to activate API conversations.'
-      : !webhookUrl
-        ? 'The public WhatsApp callback is not configured yet.'
-        : env.webhookPublicReady !== true
-          ? 'The public callback has not been activated. You can still open WhatsApp directly.'
-          : !webhookReady
-            ? 'Subscribe the callback URL in your Meta app to activate incoming API messages.'
-            : null;
+    : webhookStatus?.disconnectedAt
+      ? 'Meta disconnected this WhatsApp Business account. Open WhatsApp Integration and reconnect it.'
+      : !connection?.verifiedAt
+        ? 'Verify your WhatsApp Business connection to activate API conversations.'
+        : !webhookUrl
+          ? 'The public WhatsApp callback is not configured yet.'
+          : env.webhookPublicReady !== true
+            ? 'The public callback has not been activated. You can still open WhatsApp directly.'
+            : !webhookReady
+              ? 'Subscribe the callback URL in your Meta app to activate incoming API messages.'
+              : null;
   return {
     configured: !reason,
     senderPhone: connection?.phone || null,
@@ -296,7 +298,7 @@ function inboxConfiguration(
     lastWebhookAt: webhookStatus?.lastSignedEventAt || null,
   };
 }
-async function verifyUser(request: Request, env: ChatEnvironment, send: typeof fetch) {
+export async function verifyUser(request: Request, env: ChatEnvironment, send: typeof fetch) {
   const authorization = request.headers.get('authorization') || '';
   const token =
     authorization.length < 16384 ? authorization.match(/^Bearer (\S+)$/)?.[1] : undefined;

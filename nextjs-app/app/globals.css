@@ -3610,3 +3610,40 @@ tbody tr:hover {
   color: #6d8588;
   margin: -8px 0 18px;
 }
+.quick-whatsapp-connect {
+  padding: 26px;
+  margin: 24px 0;
+}
+.quick-connect-heading {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+.quick-whatsapp-connect h2 {
+  font-size: 20px;
+  margin: 0 0 8px;
+}
+.quick-whatsapp-connect p {
+  line-height: 1.8;
+  color: var(--muted, #6b858a);
+  font-size: 13px;
+}
+.quick-connect-account {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 0;
+  color: #087d78;
+}
+.quick-whatsapp-connect .inline-actions {
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+.advanced-whatsapp-settings > summary {
+  cursor: pointer;
+  padding: 18px 0;
+  color: #17475b;
+  font-weight: 600;
+}

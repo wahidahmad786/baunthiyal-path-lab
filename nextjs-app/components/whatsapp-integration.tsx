@@ -12,6 +12,7 @@ import { labClientAuth } from '@/lib/client-auth';
 import type { ConnectionSummary } from '@/lib/whatsapp-connection';
 import { metaTestSender } from '@/lib/chat-reply-state';
 import { Field, Notice } from './ui';
+import WhatsAppConnect from './whatsapp-connect';
 
 const empty = {
   phone: '',
@@ -152,7 +153,7 @@ export default function WhatsAppIntegration({
         </span>
         <div>
           <h2>Connect your WhatsApp Business</h2>
-          <p>Add your Meta account details to manage your WhatsApp connection.</p>
+          <p>Connect and manage the WhatsApp account for your Google login.</p>
         </div>
         <span className={`badge ${saved?.verifiedAt && !verificationFailed ? 'green' : 'muted'}`}>
           {verificationFailed
@@ -179,305 +180,324 @@ export default function WhatsAppIntegration({
           its WhatsApp Business mobile app.
         </Notice>
       )}
-      <div className="integration-layout">
-        <section className="panel integration-form">
-          <div className="panel-heading">
-            <div>
-              <h2>WhatsApp account details</h2>
-              <p>These details belong to your signed-in account.</p>
+      {!loading && (
+        <WhatsAppConnect
+          saved={saved}
+          onConnected={(connection) => {
+            setSaved(connection);
+            setVerificationFailed(false);
+            const { phone, phoneNumberId, businessAccountId, appId } = connection;
+            setValues({ ...empty, phone, phoneNumberId, businessAccountId, appId });
+            onConnectionChange?.(!!connection.verifiedAt);
+            void request()
+              .then((result) => setWebhook(result.webhook || null))
+              .catch(() => {});
+          }}
+        />
+      )}
+      <details className="advanced-whatsapp-settings">
+        <summary>Advanced connection settings · manual API details</summary>
+        <div className="integration-layout">
+          <section className="panel integration-form">
+            <div className="panel-heading">
+              <div>
+                <h2>WhatsApp account details</h2>
+                <p>These details belong to your signed-in account.</p>
+              </div>
+              <LockKeyhole size={19} />
             </div>
-            <LockKeyhole size={19} />
-          </div>
-          {loading ? (
-            <div className="integration-loading">
-              <LoaderCircle className="spin" size={20} />
-              Loading your connection…
-            </div>
-          ) : (
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                void save(true);
-              }}
-            >
-              {error && <Notice error>{error}</Notice>}
-              {notice && <Notice>{notice}</Notice>}
-              <div className="integration-fields">
-                <Field
-                  label="WhatsApp phone number"
-                  hint="Include the country code, for example +916395951791."
-                >
-                  <input
-                    required
-                    type="tel"
-                    autoComplete="tel"
-                    placeholder="+91…"
-                    value={values.phone}
-                    onChange={(e) => update('phone', e.target.value)}
-                  />
-                </Field>
-                <Field
-                  label="Phone Number ID"
-                  hint="Meta → WhatsApp → API Setup → Phone number ID."
-                >
-                  <input
-                    required
-                    inputMode="numeric"
-                    pattern="[0-9]{5,30}"
-                    value={values.phoneNumberId}
-                    onChange={(e) => update('phoneNumberId', e.target.value)}
-                    placeholder="Numeric messaging phone ID"
-                  />
-                </Field>
-                <Field
-                  label="WhatsApp Business Account ID"
-                  hint="Use your WABA ID, separate from your Business portfolio ID."
-                >
-                  <input
-                    required
-                    inputMode="numeric"
-                    pattern="[0-9]{5,30}"
-                    value={values.businessAccountId}
-                    onChange={(e) => update('businessAccountId', e.target.value)}
-                    placeholder="WhatsApp account ID"
-                  />
-                </Field>
-                <Field label="Meta App ID" hint="Meta for Developers → Your app → App settings.">
-                  <input
-                    required
-                    inputMode="numeric"
-                    pattern="[0-9]{5,30}"
-                    value={values.appId}
-                    onChange={(e) => update('appId', e.target.value)}
-                    placeholder="Meta application ID"
-                  />
-                </Field>
-                <Field
-                  label="Access token"
-                  hint={
-                    saved?.accessTokenSaved
-                      ? 'A token is saved. Leave blank to keep it, or paste a replacement.'
-                      : 'Use a token with access to your WhatsApp account.'
-                  }
-                >
-                  <input
-                    required={!saved?.accessTokenSaved}
-                    type="password"
-                    autoComplete="new-password"
-                    maxLength={4096}
-                    value={values.accessToken}
-                    onChange={(e) => update('accessToken', e.target.value)}
-                    placeholder={
-                      saved?.accessTokenSaved
-                        ? 'Saved securely · enter to replace'
-                        : 'Paste your Meta access token'
-                    }
-                  />
-                </Field>
-                <Field
-                  label="Meta App Secret"
-                  hint={
-                    saved?.appSecretSaved
-                      ? 'A secret is saved. Leave blank to keep it.'
-                      : 'Meta → App settings → Basic → App secret.'
-                  }
-                >
-                  <input
-                    required={!saved?.appSecretSaved}
-                    type="password"
-                    autoComplete="new-password"
-                    maxLength={256}
-                    value={values.appSecret}
-                    onChange={(e) => update('appSecret', e.target.value)}
-                    placeholder={
-                      saved?.appSecretSaved
-                        ? 'Saved securely · enter to replace'
-                        : 'Paste your app secret'
-                    }
-                  />
-                </Field>
-                <Field
-                  label="Webhook verification token"
-                  hint="Choose a verification token and Save details first. Then use Copy saved verify token below so Meta and the server use the same value."
-                >
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    maxLength={256}
-                    value={values.verifyToken}
-                    onChange={(e) => update('verifyToken', e.target.value)}
-                    placeholder={
-                      saved?.verifyTokenSaved
-                        ? 'Saved securely · enter to replace'
-                        : 'Your webhook verification token'
-                    }
-                  />
-                </Field>
-                <button
-                  type="button"
-                  className="text-button"
-                  disabled={!!busy}
-                  onClick={() => {
-                    const random = crypto.getRandomValues(new Uint8Array(32));
-                    update(
-                      'verifyToken',
-                      Array.from(random, (b) => b.toString(16).padStart(2, '0')).join(''),
-                    );
-                    setNotice(
-                      'A new verification token is filled in. Choose Save details before copying it to Meta.',
-                    );
-                  }}
-                >
-                  Generate a verification token
-                </button>
+            {loading ? (
+              <div className="integration-loading">
+                <LoaderCircle className="spin" size={20} />
+                Loading your connection…
               </div>
-              <div className="integration-privacy">
-                <ShieldCheck size={16} />
-                <span>
-                  API access tokens and app secrets are encrypted and never returned to the browser.
-                  Your saved callback verification token can be copied only through your
-                  authenticated account.
-                </span>
-              </div>
-              <div className="integration-actions">
-                <button
-                  type="button"
-                  className="button secondary"
-                  disabled={!!busy}
-                  onClick={(event) => {
-                    if (event.currentTarget.form?.reportValidity()) void save(false);
-                  }}
-                >
-                  {busy === 'save' && <LoaderCircle className="spin" size={16} />}Save details
-                </button>
-                <button type="submit" className="button primary" disabled={!!busy}>
-                  {busy === 'verify' ? (
-                    <LoaderCircle className="spin" size={16} />
-                  ) : (
-                    <Check size={16} />
-                  )}
-                  Verify & save
-                </button>
-              </div>
-            </form>
-          )}
-          {!loading && (
-            <div className="callback-setup">
-              <h3>Meta webhook callback</h3>
-              <p>
-                Choose Save details first. Copy both saved values below into Meta, then choose
-                Verify and save there and subscribe to the messages field.
-              </p>
-              {webhook?.callbackUrl ? (
-                <>
+            ) : (
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void save(true);
+                }}
+              >
+                {error && <Notice error>{error}</Notice>}
+                {notice && <Notice>{notice}</Notice>}
+                <div className="integration-fields">
                   <Field
-                    label="Callback URL"
-                    hint="Use this exact address, including your account identifier."
+                    label="WhatsApp phone number"
+                    hint="Include the country code, for example +916395951791."
                   >
                     <input
-                      readOnly
-                      value={webhook.callbackUrl}
-                      onFocus={(e) => e.currentTarget.select()}
+                      required
+                      type="tel"
+                      autoComplete="tel"
+                      placeholder="+91…"
+                      value={values.phone}
+                      onChange={(e) => update('phone', e.target.value)}
                     />
                   </Field>
-                  <div className="inline-actions callback-copy-actions">
-                    <button
-                      className="button secondary small-button"
-                      type="button"
-                      disabled={!!busy}
-                      onClick={() => void copyWebhookValue('url')}
+                  <Field
+                    label="Phone Number ID"
+                    hint="Meta → WhatsApp → API Setup → Phone number ID."
+                  >
+                    <input
+                      required
+                      inputMode="numeric"
+                      pattern="[0-9]{5,30}"
+                      value={values.phoneNumberId}
+                      onChange={(e) => update('phoneNumberId', e.target.value)}
+                      placeholder="Numeric messaging phone ID"
+                    />
+                  </Field>
+                  <Field
+                    label="WhatsApp Business Account ID"
+                    hint="Use your WABA ID, separate from your Business portfolio ID."
+                  >
+                    <input
+                      required
+                      inputMode="numeric"
+                      pattern="[0-9]{5,30}"
+                      value={values.businessAccountId}
+                      onChange={(e) => update('businessAccountId', e.target.value)}
+                      placeholder="WhatsApp account ID"
+                    />
+                  </Field>
+                  <Field label="Meta App ID" hint="Meta for Developers → Your app → App settings.">
+                    <input
+                      required
+                      inputMode="numeric"
+                      pattern="[0-9]{5,30}"
+                      value={values.appId}
+                      onChange={(e) => update('appId', e.target.value)}
+                      placeholder="Meta application ID"
+                    />
+                  </Field>
+                  <Field
+                    label="Access token"
+                    hint={
+                      saved?.accessTokenSaved
+                        ? 'A token is saved. Leave blank to keep it, or paste a replacement.'
+                        : 'Use a token with access to your WhatsApp account.'
+                    }
+                  >
+                    <input
+                      required={!saved?.accessTokenSaved}
+                      type="password"
+                      autoComplete="new-password"
+                      maxLength={4096}
+                      value={values.accessToken}
+                      onChange={(e) => update('accessToken', e.target.value)}
+                      placeholder={
+                        saved?.accessTokenSaved
+                          ? 'Saved securely · enter to replace'
+                          : 'Paste your Meta access token'
+                      }
+                    />
+                  </Field>
+                  <Field
+                    label="Meta App Secret"
+                    hint={
+                      saved?.appSecretSaved
+                        ? 'A secret is saved. Leave blank to keep it.'
+                        : 'Meta → App settings → Basic → App secret.'
+                    }
+                  >
+                    <input
+                      required={!saved?.appSecretSaved}
+                      type="password"
+                      autoComplete="new-password"
+                      maxLength={256}
+                      value={values.appSecret}
+                      onChange={(e) => update('appSecret', e.target.value)}
+                      placeholder={
+                        saved?.appSecretSaved
+                          ? 'Saved securely · enter to replace'
+                          : 'Paste your app secret'
+                      }
+                    />
+                  </Field>
+                  <Field
+                    label="Webhook verification token"
+                    hint="Choose a verification token and Save details first. Then use Copy saved verify token below so Meta and the server use the same value."
+                  >
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      maxLength={256}
+                      value={values.verifyToken}
+                      onChange={(e) => update('verifyToken', e.target.value)}
+                      placeholder={
+                        saved?.verifyTokenSaved
+                          ? 'Saved securely · enter to replace'
+                          : 'Your webhook verification token'
+                      }
+                    />
+                  </Field>
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={!!busy}
+                    onClick={() => {
+                      const random = crypto.getRandomValues(new Uint8Array(32));
+                      update(
+                        'verifyToken',
+                        Array.from(random, (b) => b.toString(16).padStart(2, '0')).join(''),
+                      );
+                      setNotice(
+                        'A new verification token is filled in. Choose Save details before copying it to Meta.',
+                      );
+                    }}
+                  >
+                    Generate a verification token
+                  </button>
+                </div>
+                <div className="integration-privacy">
+                  <ShieldCheck size={16} />
+                  <span>
+                    API access tokens and app secrets are encrypted and never returned to the
+                    browser. Your saved callback verification token can be copied only through your
+                    authenticated account.
+                  </span>
+                </div>
+                <div className="integration-actions">
+                  <button
+                    type="button"
+                    className="button secondary"
+                    disabled={!!busy}
+                    onClick={(event) => {
+                      if (event.currentTarget.form?.reportValidity()) void save(false);
+                    }}
+                  >
+                    {busy === 'save' && <LoaderCircle className="spin" size={16} />}Save details
+                  </button>
+                  <button type="submit" className="button primary" disabled={!!busy}>
+                    {busy === 'verify' ? (
+                      <LoaderCircle className="spin" size={16} />
+                    ) : (
+                      <Check size={16} />
+                    )}
+                    Verify & save
+                  </button>
+                </div>
+              </form>
+            )}
+            {!loading && (
+              <div className="callback-setup">
+                <h3>Meta webhook callback</h3>
+                <p>
+                  Choose Save details first. Copy both saved values below into Meta, then choose
+                  Verify and save there and subscribe to the messages field.
+                </p>
+                {webhook?.callbackUrl ? (
+                  <>
+                    <Field
+                      label="Callback URL"
+                      hint="Use this exact address, including your account identifier."
                     >
-                      Copy callback URL
-                    </button>
-                    <button
-                      className="button secondary small-button"
-                      type="button"
-                      disabled={!!busy || !webhook.verifyTokenSaved || !!values.verifyToken}
-                      onClick={() => void copyWebhookValue('token')}
-                    >
-                      Copy saved verify token
-                    </button>
-                  </div>
-                  {!webhook.publicReady && (
-                    <Notice>
-                      The callback is not publicly activated yet. Meta cannot verify a private
-                      callback.
-                    </Notice>
-                  )}
-                </>
-              ) : (
-                <Notice>The callback URL is not configured yet.</Notice>
-              )}
-            </div>
-          )}
-        </section>
-        <aside className="panel integration-help">
-          <h2>Where to find your details</h2>
-          <ol>
-            <li>Open your app in Meta for Developers.</li>
-            <li>Go to WhatsApp → API Setup for the phone number and account IDs.</li>
-            <li>Copy your access token, App ID and App Secret into this form.</li>
-            <li>Choose Verify & save to check the number and app with Meta.</li>
-          </ol>
-          <a
-            className="button secondary"
-            href="https://developers.facebook.com/apps/"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Open Meta for Developers <ExternalLink size={15} />
-          </a>
-          <div className="integration-help-note">
-            <strong>Keep using the same WhatsApp Business number</strong>
-            <p>
-              If you also use this number in the WhatsApp Business mobile app, use Meta’s supported
-              Coexistence onboarding.
-            </p>
-          </div>
-          <div className="integration-help-note">
-            <strong>Before your first campaign</strong>
-            <p>
-              Sending also needs a subscribed webhook, approved marketing templates, billing where
-              applicable, and customers who have opted in. Verifying credentials does not send any
-              messages.
-            </p>
-          </div>
-          <div className="integration-help-note meta-policy-links">
-            <strong>Public URLs for Meta app settings</strong>
-            <p>
-              Use these public pages in your Meta app settings. Meta controls app review and Live
-              mode. WhatsApp API access still requires a valid access token in Live mode.
-            </p>
-            {[
-              ['Privacy policy', 'privacy-policy'],
-              ['Terms of service', 'terms'],
-              ['User data deletion instructions', 'data-deletion'],
-              ['Contact', 'contact'],
-            ].map(([label, path]) => (
-              <div key={path}>
-                <a href={`/${path}`} target="_blank" rel="noopener noreferrer">
-                  {label} <ExternalLink size={11} />
-                </a>
-                <input
-                  aria-label={`${label} URL`}
-                  readOnly
-                  value={siteOrigin ? `${siteOrigin}/${path}` : ''}
-                  onFocus={(event) => event.currentTarget.select()}
-                />
+                      <input
+                        readOnly
+                        value={webhook.callbackUrl}
+                        onFocus={(e) => e.currentTarget.select()}
+                      />
+                    </Field>
+                    <div className="inline-actions callback-copy-actions">
+                      <button
+                        className="button secondary small-button"
+                        type="button"
+                        disabled={!!busy}
+                        onClick={() => void copyWebhookValue('url')}
+                      >
+                        Copy callback URL
+                      </button>
+                      <button
+                        className="button secondary small-button"
+                        type="button"
+                        disabled={!!busy || !webhook.verifyTokenSaved || !!values.verifyToken}
+                        onClick={() => void copyWebhookValue('token')}
+                      >
+                        Copy saved verify token
+                      </button>
+                    </div>
+                    {!webhook.publicReady && (
+                      <Notice>
+                        The callback is not publicly activated yet. Meta cannot verify a private
+                        callback.
+                      </Notice>
+                    )}
+                  </>
+                ) : (
+                  <Notice>The callback URL is not configured yet.</Notice>
+                )}
               </div>
-            ))}
-          </div>
-          {saved?.verifiedAt && (
+            )}
+          </section>
+          <aside className="panel integration-help">
+            <h2>Where to find your details</h2>
+            <ol>
+              <li>Open your app in Meta for Developers.</li>
+              <li>Go to WhatsApp → API Setup for the phone number and account IDs.</li>
+              <li>Copy your access token, App ID and App Secret into this form.</li>
+              <li>Choose Verify & save to check the number and app with Meta.</li>
+            </ol>
+            <a
+              className="button secondary"
+              href="https://developers.facebook.com/apps/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open Meta for Developers <ExternalLink size={15} />
+            </a>
             <div className="integration-help-note">
-              <strong>{saved.verifiedName || 'Meta verification complete'}</strong>
+              <strong>Keep using the same WhatsApp Business number</strong>
               <p>
-                Checked{' '}
-                {new Date(saved.verifiedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}.
+                If you also use this number in the WhatsApp Business mobile app, use Meta’s
+                supported Coexistence onboarding.
               </p>
             </div>
-          )}
-        </aside>
-      </div>
+            <div className="integration-help-note">
+              <strong>Before your first campaign</strong>
+              <p>
+                Sending also needs a subscribed webhook, approved marketing templates, billing where
+                applicable, and customers who have opted in. Verifying credentials does not send any
+                messages.
+              </p>
+            </div>
+            <div className="integration-help-note meta-policy-links">
+              <strong>Public URLs for Meta app settings</strong>
+              <p>
+                Use these public pages in your Meta app settings. Meta controls app review and Live
+                mode. WhatsApp API access still requires a valid access token in Live mode.
+              </p>
+              {[
+                ['Privacy policy', 'privacy-policy'],
+                ['Terms of service', 'terms'],
+                ['User data deletion instructions', 'data-deletion'],
+                ['Contact', 'contact'],
+              ].map(([label, path]) => (
+                <div key={path}>
+                  <a href={`/${path}`} target="_blank" rel="noopener noreferrer">
+                    {label} <ExternalLink size={11} />
+                  </a>
+                  <input
+                    aria-label={`${label} URL`}
+                    readOnly
+                    value={siteOrigin ? `${siteOrigin}/${path}` : ''}
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
+                </div>
+              ))}
+            </div>
+            {saved?.verifiedAt && (
+              <div className="integration-help-note">
+                <strong>{saved.verifiedName || 'Meta verification complete'}</strong>
+                <p>
+                  Checked{' '}
+                  {new Date(saved.verifiedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
+                  .
+                </p>
+              </div>
+            )}
+          </aside>
+        </div>
+      </details>
     </div>
   );
 }

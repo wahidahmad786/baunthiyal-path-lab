@@ -24,17 +24,22 @@ export type ConnectionInput = z.infer<typeof connectionSchema>;
 export type ConnectionRecord = Omit<ConnectionInput, 'verify'> & {
   verifiedAt: string | null;
   verifiedName: string;
+  connectionMethod?: 'embedded_signup' | 'manual';
+  tokenExpiresAt?: string | null;
+  dataAccessExpiresAt?: string | null;
+  coexistence?: boolean;
+  registrationPin?: string;
 };
 export type ConnectionSummary = Omit<
   ConnectionRecord,
-  'accessToken' | 'appSecret' | 'verifyToken'
+  'accessToken' | 'appSecret' | 'verifyToken' | 'registrationPin'
 > & {
   accessTokenSaved: boolean;
   appSecretSaved: boolean;
   verifyTokenSaved: boolean;
 };
 export function connectionSummary(record: ConnectionRecord): ConnectionSummary {
-  const { accessToken, appSecret, verifyToken, ...publicFields } = record;
+  const { accessToken, appSecret, verifyToken, registrationPin: _pin, ...publicFields } = record;
   return {
     ...publicFields,
     accessTokenSaved: !!accessToken,
@@ -88,9 +93,31 @@ export async function decryptConnection(
     unbase64(envelope.ciphertext),
   );
   const record = JSON.parse(new TextDecoder().decode(decrypted));
-  const { verifiedAt, verifiedName, ...credentials } = record;
+  const {
+    verifiedAt,
+    verifiedName,
+    connectionMethod,
+    tokenExpiresAt,
+    dataAccessExpiresAt,
+    coexistence,
+    registrationPin,
+    ...credentials
+  } = record;
   const { verify: _verify, ...input } = connectionSchema.parse(credentials);
-  return { ...input, verifiedAt: verifiedAt || null, verifiedName: verifiedName || '' };
+  return {
+    ...input,
+    verifiedAt: verifiedAt || null,
+    verifiedName: verifiedName || '',
+    ...(connectionMethod
+      ? {
+          connectionMethod,
+          tokenExpiresAt: tokenExpiresAt || null,
+          dataAccessExpiresAt: dataAccessExpiresAt || null,
+          coexistence: coexistence === true,
+          ...(registrationPin ? { registrationPin } : {}),
+        }
+      : {}),
+  };
 }
 export async function verifyMetaConnection(
   record: ConnectionRecord,

@@ -11,6 +11,8 @@ import {
   type ChatDocument,
 } from './account-chat-api';
 import type { ChatEnvironment, ChatMessageStatus } from './chat-types';
+import { pendingEmbeddedChallenge } from './embedded-signup-api';
+import type { ConnectionRecord } from './whatsapp-connection';
 
 function object(value: unknown): Record<string, any> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -55,6 +57,7 @@ async function saveInbound(
   store: ChatStore,
   value: Record<string, any>,
   message: Record<string, any>,
+  historical = false,
 ) {
   if (
     !validPhone(message.from) ||
@@ -76,7 +79,7 @@ async function saveInbound(
       store.read(`conversations/${id}`),
       store.read(`customers/${id}`),
     ]);
-    if (existing) return;
+    if (existing && (historical || existing.data.source !== 'business_app_history')) return;
     const contact = (Array.isArray(value.contacts) ? value.contacts : []).find(
       (entry: any) => entry?.wa_id === message.from,
     );
@@ -98,11 +101,15 @@ async function saveInbound(
       Date.parse(createdAt) > Date.parse(current.lastInboundAt);
     const conversation = {
       ...current,
+      lastInboundAt:
+        conversationDoc?.data.phoneNumberId === value.metadata.phone_number_id
+          ? current.lastInboundAt
+          : null,
       ownerId: store.uid,
       phoneNumberId: value.metadata.phone_number_id,
       phone: message.from,
       customerName: name,
-      unreadCount: current.unreadCount + 1,
+      unreadCount: current.unreadCount + (historical ? 0 : 1),
       ...(latest
         ? {
             lastMessageAt: createdAt,
@@ -110,7 +117,7 @@ async function saveInbound(
             lastMessageStatus: 'received',
           }
         : {}),
-      ...(latestInbound ? { lastInboundAt: createdAt } : {}),
+      ...(!historical && latestInbound ? { lastInboundAt: createdAt } : {}),
     };
     const writes: unknown[] = [
       store.write(
@@ -125,12 +132,14 @@ async function saveInbound(
           status: 'received',
           createdAt,
           providerAt: createdAt,
+          source: historical ? 'business_app_history' : 'cloud_api',
         },
-        null,
+        existing,
       ),
       store.write(`conversations/${id}`, conversation, conversationDoc),
     ];
     if (
+      !historical &&
       customer &&
       textMessage &&
       isStopMessage(text) &&
@@ -165,7 +174,12 @@ async function saveInbound(
     await store.commit(writes);
   });
 }
-async function saveStatus(store: ChatStore, event: Record<string, any>, phoneNumberId: string) {
+async function saveStatus(
+  store: ChatStore,
+  event: Record<string, any>,
+  phoneNumberId: string,
+  echo?: Record<string, any>,
+) {
   if (
     !validPhone(event.recipient_id) ||
     typeof event.id !== 'string' ||
@@ -185,7 +199,7 @@ async function saveStatus(store: ChatStore, event: Record<string, any>, phoneNum
     ]);
     const previous = existing?.data.status || 'accepted';
     const status = nextChatStatus(previous, event.status as ChatMessageStatus);
-    if (existing && status === previous) return;
+    if (existing && status === previous && !echo) return;
     const current = conversationFrom(
       conversationDoc?.data || {
         phone: event.recipient_id,
@@ -204,13 +218,22 @@ async function saveStatus(store: ChatStore, event: Record<string, any>, phoneNum
       id: messageId,
       metaId: event.id,
       direction: 'outbound',
-      type: existing?.data.type || 'unsupported',
+      type: echo
+        ? echo.type === 'text' && typeof echo.text?.body === 'string'
+          ? 'text'
+          : 'unsupported'
+        : existing?.data.type || 'unsupported',
       text:
-        existing?.data.text ||
+        (echo
+          ? typeof echo.text?.body === 'string'
+            ? echo.text.body.slice(0, 4096)
+            : `[${String(echo.type || 'Unsupported').slice(0, 50)} message sent in WhatsApp Business app]`
+          : existing?.data.text) ||
         '[Outbound message status received from Meta; content is not available]',
       status,
       createdAt,
       providerAt,
+      ...(echo ? { source: 'business_app' } : {}),
       ...(status === 'failed'
         ? {
             error: Number.isSafeInteger(Number(event.errors?.[0]?.code))
@@ -241,6 +264,87 @@ async function saveStatus(store: ChatStore, event: Record<string, any>, phoneNum
       ),
     ]);
   });
+}
+
+async function saveContact(store: ChatStore, value: Record<string, any>, item: any) {
+  if (item?.type !== 'contact' || item.action !== 'add') return;
+  const phone = String(item.contact?.phone_number || '').replace(/\D/g, '');
+  if (!validPhone(phone)) return; // Phone-less business-scoped identities are not phone recipients.
+  const id = (await chatHash(phone)).slice(0, 32);
+  await retryConflict(async () => {
+    const [conversation, customer] = await Promise.all([
+      store.read(`conversations/${id}`),
+      store.read(`customers/${id}`),
+    ]);
+    const current = conversationFrom(conversation?.data || { phone }, id);
+    await store.commit([
+      store.write(
+        `conversations/${id}`,
+        {
+          ...current,
+          ownerId: store.uid,
+          phoneNumberId: value.metadata.phone_number_id,
+          lastInboundAt:
+            conversation?.data.phoneNumberId === value.metadata.phone_number_id
+              ? current.lastInboundAt
+              : null,
+          customerName:
+            customer?.data.name ||
+            String(item.contact.full_name || item.contact.first_name || current.customerName).slice(
+              0,
+              120,
+            ),
+        },
+        conversation,
+      ),
+    ]);
+  });
+  // Importing a contact never creates marketing consent or a customer registration.
+}
+async function saveBusinessAppChange(
+  store: ChatStore,
+  connection: ConnectionRecord,
+  field: string,
+  value: Record<string, any>,
+) {
+  if (field === 'smb_app_state_sync') {
+    for (const item of Array.isArray(value.state_sync) ? value.state_sync : [])
+      await saveContact(store, value, item);
+  } else if (field === 'smb_message_echoes') {
+    for (const item of Array.isArray(value.message_echoes) ? value.message_echoes : []) {
+      if (!validPhone(item?.to) || item.from !== connection.phone.replace(/\D/g, '')) continue;
+      await saveStatus(
+        store,
+        { id: item.id, timestamp: item.timestamp, recipient_id: item.to, status: 'sent' },
+        connection.phoneNumberId,
+        item,
+      );
+    }
+  } else if (field === 'history') {
+    for (const chunk of Array.isArray(value.history) ? value.history : []) {
+      if (chunk.errors) continue; // A customer may decline history sharing.
+      for (const thread of Array.isArray(chunk.threads) ? chunk.threads : []) {
+        const phone = thread.id || thread.context?.wa_id;
+        if (!validPhone(phone)) continue;
+        for (const item of Array.isArray(thread.messages) ? thread.messages : []) {
+          if (item.from === phone) await saveInbound(store, value, item, true);
+          else if (item.from === connection.phone.replace(/\D/g, '')) {
+            const status = ['sent', 'delivered', 'read', 'failed'].includes(
+              item.history_context?.status,
+            )
+              ? item.history_context.status
+              : 'sent';
+            await saveStatus(
+              store,
+              { id: item.id, timestamp: item.timestamp, recipient_id: phone, status },
+              connection.phoneNumberId,
+              item,
+            );
+          }
+        }
+      }
+    }
+  }
 }
 async function saveWebhookStatus(store: ChatStore, values: Record<string, unknown>) {
   await retryConflict(async () => {
@@ -282,6 +386,23 @@ export async function handleWhatsAppWebhook(
       throw new ChatError(403, 'Invalid callback signature.');
     const store = await ChatStore.open(env, uid, send, undefined, true);
     const connection = await readChatConnection(store);
+    if (
+      request.method === 'GET' &&
+      (!connection?.verifyToken ||
+        !(await equalSecret(
+          url.searchParams.get('hub.verify_token') || '',
+          connection.verifyToken,
+        )))
+    ) {
+      const pending = await pendingEmbeddedChallenge(
+        store,
+        url.searchParams.get('hub.verify_token') || '',
+      );
+      if (pending)
+        return new Response(url.searchParams.get('hub.challenge'), {
+          headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+        });
+    }
     if (!connection) throw new ChatError(404, 'Callback not found.');
     if (request.method === 'GET') {
       if (
@@ -325,6 +446,29 @@ export async function handleWhatsAppWebhook(
       if (changes.length > 100) throw new ChatError(413, 'Too many callback changes.');
       for (const change of changes) {
         const value = object(change?.value);
+        if (
+          connection.coexistence &&
+          change?.field === 'account_update' &&
+          value &&
+          (value.waba_info?.waba_id === connection.businessAccountId ||
+            entry.id === connection.businessAccountId) &&
+          ['PARTNER_REMOVED', 'ACCOUNT_OFFBOARDED'].includes(value.event)
+        ) {
+          await saveWebhookStatus(store, {
+            phoneNumberId: connection.phoneNumberId,
+            disconnectedAt: new Date().toISOString(),
+          });
+          continue;
+        }
+        if (
+          connection.coexistence &&
+          ['history', 'smb_app_state_sync', 'smb_message_echoes'].includes(change?.field) &&
+          value?.metadata?.phone_number_id === connection.phoneNumberId
+        ) {
+          await saveBusinessAppChange(store, connection, change.field, value);
+          matchedSender = true;
+          continue;
+        }
         if (
           change?.field !== 'messages' ||
           !value ||

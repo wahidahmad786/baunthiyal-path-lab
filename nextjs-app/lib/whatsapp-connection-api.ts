@@ -9,6 +9,8 @@ import {
 } from './whatsapp-connection';
 import { loadMarketingTemplates, MetaTemplateError } from './meta-marketing-templates';
 import { allowedRequestOrigin } from './request-origin';
+import { ChatError, ChatStore } from './account-chat-api';
+import { claimWhatsAppAccount } from './whatsapp-account-owner';
 
 export type ConnectionEnvironment = {
   projectId: string;
@@ -20,6 +22,7 @@ export type ConnectionEnvironment = {
   appOrigin?: string;
   webhookBaseUrl?: string;
   webhookPublicReady?: boolean;
+  serviceAccountJson?: string;
 };
 class ConnectionError extends Error {
   constructor(
@@ -175,6 +178,10 @@ export async function handleWhatsAppConnection(
       throw new ConnectionError(400, 'Enter an access token and app secret before saving.');
     if (input.verify)
       Object.assign(record, await verifyMetaConnection(record, env.graphVersion, send));
+    if (input.verify && env.serviceAccountJson) {
+      const store = await ChatStore.open(env, uid, send, token, true);
+      await claimWhatsAppAccount(store, record.businessAccountId);
+    }
     // Verification describes these exact credentials; editing and saving always clears it.
     const envelope = await encryptConnection(record, uid, env.encryptionKey);
     const timestamp = new Date().toISOString();
@@ -215,6 +222,8 @@ export async function handleWhatsAppConnection(
         : 'Connection details saved securely. Verify with Meta before sending.',
     });
   } catch (error) {
+    if (error instanceof ChatError)
+      return json({ error: error.message, code: error.code }, error.status);
     if (error instanceof MetaTemplateError)
       return json(
         {

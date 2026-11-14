@@ -52,13 +52,14 @@ import { handleAccountBanners } from '@/lib/account-banners-api';
 import { handleAccountChat } from '@/lib/account-chat-api';
 import { accountEnvironment } from '@/lib/server/account-environment';
 import { handleAccountCustomers } from '@/lib/account-customers-api';
+import { handleEmbeddedSignup } from '@/lib/embedded-signup-api';
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 type Context = { params: Promise<{ path: string[] }> };
 const idSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,150}$/);
 function accountConnection(request: Request) {
-  return handleWhatsAppConnection(request, accountEnvironment());
+  return handleWhatsAppConnection(request, accountEnvironment(true));
 }
 function accountCustomersRequest(request: Request) {
   return handleAccountCustomers(request, accountEnvironment());
@@ -104,6 +105,8 @@ export async function GET(request: NextRequest, context: Context) {
   try {
     const p = (await context.params).path;
     const key = p.join('/');
+    if (p[0] === 'whatsapp' && p[1] === 'embedded-signup')
+      return handleEmbeddedSignup(request, accountEnvironment(true));
     if (p[0] === 'account' && p[1] === 'banners') return accountBannerRequest(request);
     if (p[0] === 'account' && (p[1] === 'catalog' || p[1] === 'offers'))
       return accountCatalogRequest(request);
@@ -217,6 +220,8 @@ export async function POST(request: NextRequest, context: Context) {
   try {
     const p = (await context.params).path;
     const key = p.join('/');
+    if (p[0] === 'whatsapp' && p[1] === 'embedded-signup')
+      return handleEmbeddedSignup(request, accountEnvironment(true));
     if (p[0] === 'account' && p[1] === 'banners') return accountBannerRequest(request);
     if (p[0] === 'account' && (p[1] === 'catalog' || p[1] === 'offers'))
       return accountCatalogRequest(request);

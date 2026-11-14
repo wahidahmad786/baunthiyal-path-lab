@@ -22,5 +22,10 @@ export function accountEnvironment(includeServiceIdentity = false) {
       : '',
     webhookBaseUrl: process.env.WHATSAPP_WEBHOOK_BASE_URL,
     webhookPublicReady: process.env.WHATSAPP_WEBHOOK_PUBLIC_READY === 'true',
+    metaAppId: process.env.META_EMBEDDED_APP_ID,
+    metaAppSecret: process.env.META_EMBEDDED_APP_SECRET,
+    metaConfigId: process.env.META_EMBEDDED_CONFIG_ID,
+    embeddedEnabled: process.env.META_EMBEDDED_SIGNUP_ENABLED === 'true',
+    coexistenceEnabled: process.env.META_COEXISTENCE_ENABLED === 'true',
   };
 }
