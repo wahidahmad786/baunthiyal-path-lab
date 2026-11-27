@@ -50,7 +50,7 @@ import { labClientAuth, clientAuthConfigured, previewOnly } from '@/lib/client-a
 import { LegalLinks } from './legal-links';
 import { hasLabAdminAccess } from '@/lib/access';
 import type { FirebaseSetupSnapshot } from '@/lib/setup-types';
-import WhatsAppIntegration from './whatsapp-integration';
+import WhatsAppConnectionOptions from './whatsapp-connection-options';
 import PublicHome from './public-home';
 import TestCatalog from './test-catalog';
 import WhatsAppInbox from './whatsapp-inbox';
@@ -180,6 +180,20 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [authChecked, setAuthChecked] = useState(false);
   const [whatsappVerified, setWhatsappVerified] = useState(false);
+  const [whatsappProvider, setWhatsappProvider] = useState<'meta' | 'personal' | null>(null);
+  useEffect(() => {
+    setWhatsappProvider(null);
+    if (!previewIdentity) return;
+    let active = true;
+    void accountApi<{ mode: 'meta' | 'personal' | null }>('whatsapp/provider')
+      .then((r) => {
+        if (active) setWhatsappProvider(r.mode);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [previewIdentity?.uid]);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
   const [mobile, setMobile] = useState(false);
@@ -450,19 +464,21 @@ export default function Dashboard() {
         </button>
         <div className="side-label section-label">MARKETING & CAMPAIGNS</div>
         <nav aria-label="Marketing & Campaigns">
-          {nav.map((n) => (
-            <button
-              key={n.id}
-              className={`side-item ${section === n.id ? 'active' : ''}`}
-              onClick={() => navigate(n.id)}
-            >
-              <n.icon size={18} />
-              {n.label}
-              {n.id === 'bookings' && requests > 0 ? (
-                <span className="count">{requests}</span>
-              ) : null}
-            </button>
-          ))}
+          {nav
+            .filter((n) => whatsappProvider !== 'personal' || n.id !== 'templates')
+            .map((n) => (
+              <button
+                key={n.id}
+                className={`side-item ${section === n.id ? 'active' : ''}`}
+                onClick={() => navigate(n.id)}
+              >
+                <n.icon size={18} />
+                {n.label}
+                {n.id === 'bookings' && requests > 0 ? (
+                  <span className="count">{requests}</span>
+                ) : null}
+              </button>
+            ))}
         </nav>
         <div className="side-label section-label">MANAGE</div>
         <button
@@ -1283,9 +1299,13 @@ export default function Dashboard() {
             </>
           )}
           {section === 'whatsapp' && previewIdentity && (
-            <WhatsAppIntegration onConnectionChange={setWhatsappVerified} />
+            <WhatsAppConnectionOptions
+              key={previewIdentity.uid}
+              onConnectionChange={setWhatsappVerified}
+              onProviderChange={setWhatsappProvider}
+            />
           )}
-          {section === 'templates' && previewIdentity && (
+          {section === 'templates' && previewIdentity && whatsappProvider !== 'personal' && (
             <TemplateManager
               key={previewIdentity.uid}
               onOpenIntegration={() => navigate('whatsapp')}

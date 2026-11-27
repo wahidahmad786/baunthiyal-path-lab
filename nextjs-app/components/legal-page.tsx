@@ -13,6 +13,7 @@ export const LEGAL_PAGES: Record<string, { title: string; intro: string; section
         paragraphs: [
           'When you sign in with Google, the application uses your account identifier, name, email address and verification status to identify your workspace. We do not receive your Google password.',
           'Customer records can include name, phone number, optional age, customer groups, bookings, test selections, visit information and recorded communication preferences. Where a laboratory service requires medical or report information, access is limited to the relevant service and authorized staff.',
+          'If you choose to link a personal or mobile WhatsApp account, the server stores encrypted linked-device credentials and encryption keys to restore that device session. New individual messages and provider receipts are saved in your authenticated workspace and are accessible to team members you authorize. Existing phone chat history is not imported. You can remove the linked device from WhatsApp on your phone. This connection uses an unofficial WhatsApp Web client and does not make the account a Meta-approved Business API account.',
           'WhatsApp records can include message content, sender and recipient identifiers, timestamps, responses, and delivery or read status when provided by Meta. Campaigns can include promotional images and booking requests.',
         ],
       },
@@ -87,7 +88,7 @@ export const LEGAL_PAGES: Record<string, { title: string; intro: string; section
       {
         title: 'Communications and availability',
         paragraphs: [
-          'Promotional WhatsApp messages require separate marketing consent and may be stopped at any time. Essential service notifications are handled separately. Message availability and delivery depend on the relevant providers and account configuration.',
+          'Promotional WhatsApp messages require separate marketing consent and may be stopped at any time. Essential service notifications are handled separately. Message availability and delivery depend on the relevant providers and account configuration. Linked personal WhatsApp uses an unofficial client; WhatsApp may require re-linking or restrict an account. Its individual inbox does not provide Meta-approved campaign sending. Saved sessions require running application hosting.',
           'We may maintain or update the service. Use the contact number for assistance when a website function or automated channel is unavailable. The privacy policy explains information handling and your choices.',
         ],
       },
@@ -172,7 +173,7 @@ export function LegalPage({ slug }: { slug: string }) {
         <span className="eyebrow">BAUNTHIYAL PATH LAB</span>
         <h1>{page.title}</h1>
         <p className="legal-intro">{page.intro}</p>
-        <p className="legal-updated">Last updated: 13 November 2026</p>
+        <p className="legal-updated">Last updated: 27 November 2026</p>
         {page.sections.map((section) => (
           <section key={section.title}>
             <h2>{section.title}</h2>

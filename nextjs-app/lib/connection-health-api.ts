@@ -1,3 +1,5 @@
+import { providerDocument } from './whatsapp-provider';
+import { personalStatus } from './personal-whatsapp';
 import {
   ChatError,
   ChatStore,
@@ -54,6 +56,25 @@ async function persistAlerts(store: ChatStore, issues: Issue[]) {
   if (writes.length) await store.commit(writes);
 }
 async function currentHealth(store: ChatStore, force: boolean): Promise<ConnectionHealth> {
+  const binding = await providerDocument(store);
+  if (binding?.data.mode === 'personal') {
+    const status = await personalStatus(store);
+    return {
+      state:
+        status.status === 'connected'
+          ? 'healthy'
+          : binding.data.locked
+            ? 'action_required'
+            : 'not_connected',
+      checkedAt: iso(),
+      nextCheckAt: new Date(Date.now() + 60000).toISOString(),
+      tokenExpiresAt: null,
+      dataAccessExpiresAt: null,
+      webhookReady: false,
+      message: status.message,
+      alerts: [],
+    };
+  }
   const connection = await readChatConnection(store);
   const fingerprint = connection
     ? await chatHash(

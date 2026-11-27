@@ -1,0 +1,193 @@
+.wa-options {
+  display: grid;
+  gap: 24px;
+}
+.wa-choice-heading p,
+.wa-method p,
+.wa-method li,
+.wa-link-card p {
+  color: #66818b;
+  line-height: 1.7;
+}
+.wa-choice-heading h2,
+.wa-link-card h2 {
+  margin: 0 0 8px;
+  color: #164b62;
+}
+.wa-method-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+.wa-method {
+  padding: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+.wa-method h3 {
+  font-size: 24px;
+  margin: 0;
+}
+.wa-method p,
+.wa-method ul {
+  margin: 0;
+}
+.wa-method ul {
+  padding-left: 20px;
+  margin-bottom: 18px;
+}
+.wa-method .button {
+  margin-top: auto;
+}
+.wa-method-icon {
+  background: #e9f5f1;
+  color: #008b83;
+  border-radius: 16px;
+  padding: 17px;
+  display: flex;
+}
+.wa-method-label {
+  letter-spacing: 1.4px;
+  font-size: 10px;
+  color: #738f99;
+  font-weight: 700;
+}
+.wa-choice-note {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: #eaf5f1;
+  border: 1px solid #d6e9e3;
+  border-radius: 14px;
+  padding: 20px;
+  color: #16665f;
+}
+.wa-choice-note p {
+  margin: 4px 0 0;
+}
+.wa-choice-note .text-button {
+  margin-left: auto;
+}
+.wa-link-card {
+  padding: 32px;
+  max-width: 900px;
+}
+.wa-link-heading {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  color: #008b83;
+}
+.wa-link-heading p {
+  margin: 0;
+}
+.wa-linked-phone {
+  margin: 28px 0 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  color: #164b62;
+  flex-wrap: wrap;
+}
+.wa-qr,
+.wa-pair-code {
+  text-align: center;
+  padding: 20px;
+  background: #f6faf9;
+  border: 1px solid #dfede8;
+  border-radius: 12px;
+  margin: 24px 0;
+}
+.wa-qr img {
+  max-width: 100%;
+  height: auto;
+}
+.wa-pair-code strong {
+  display: block;
+  font-size: 32px;
+  letter-spacing: 5px;
+  padding: 20px;
+  color: #076e69;
+}
+.wa-accept {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  line-height: 1.7;
+  color: #42616a;
+  margin: 24px 0;
+}
+.wa-accept input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin-top: 4px;
+  accent-color: #008b83;
+}
+.wa-pair-tabs {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.wa-phone-input {
+  display: grid;
+  gap: 10px;
+  max-width: 400px;
+  margin: 20px 0;
+}
+.wa-phone-input input {
+  width: 100%;
+  padding: 14px;
+  border: 1px solid #d2e1e3;
+  border-radius: 8px;
+}
+.wa-phone-input small,
+.wa-hosting-note {
+  font-size: 12px;
+  color: #799099;
+}
+.wa-hosting-note {
+  margin-top: 28px;
+}
+.wa-linked-disclosure {
+  border-left: 3px solid #d7a948;
+  padding: 8px 16px;
+  background: #fffcf5;
+}
+.wa-linked-success {
+  color: #087a61 !important;
+}
+.wa-link-card > .text-button {
+  margin-top: 12px;
+}
+@media (max-width: 680px) {
+  .wa-method-grid {
+    grid-template-columns: 1fr;
+  }
+  .wa-method,
+  .wa-link-card {
+    padding: 22px;
+  }
+  .wa-choice-note {
+    flex-wrap: wrap;
+  }
+  .wa-choice-note .text-button {
+    margin-left: 0;
+  }
+  .wa-pair-tabs {
+    flex-wrap: wrap;
+  }
+  .wa-pair-code strong {
+    font-size: 25px;
+  }
+}
+
+.wa-options .wa-method,
+.wa-options .wa-link-card {
+  background: white;
+  border: 1px solid #dce8e8;
+  border-radius: 16px;
+  box-shadow: 0 3px 16px #174f5d04;
+}

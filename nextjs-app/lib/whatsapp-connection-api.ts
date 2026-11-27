@@ -1,3 +1,4 @@
+import { requireMetaProvider, providerPath } from './whatsapp-provider';
 import {
   connectionSchema,
   connectionSummary,
@@ -77,6 +78,14 @@ export async function handleWhatsAppConnection(
         'Secure connection storage is unavailable. Please contact the lab administrator.',
       );
     const uid = identity.localId;
+    const providerStore = env.serviceAccountJson
+      ? await ChatStore.open(env, uid, send, token, true)
+      : null;
+    if (providerStore)
+      await requireMetaProvider(
+        providerStore,
+        request.method === 'POST' && !verificationTokenRequest,
+      );
     const url = `${env.firestoreOrigin || 'https://firestore.googleapis.com'}/v1/projects/${env.projectId}/databases/(default)/documents/bpl_whatsappConnections/${encodeURIComponent(uid)}`;
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
     const existing = await send(url, { headers, signal: AbortSignal.timeout(15000) });
@@ -193,11 +202,31 @@ export async function handleWhatsAppConnection(
       createdAt: { timestampValue: document?.fields.createdAt.timestampValue || timestamp },
       updatedAt: { timestampValue: timestamp },
     };
+    const binding = providerStore ? await requireMetaProvider(providerStore, true) : null;
+    const bindingWrites =
+      providerStore && binding
+        ? [
+            providerStore.write(
+              providerPath,
+              {
+                ...binding.data,
+                locked: binding.data.locked || !!record.verifiedAt,
+                phone: record.verifiedAt ? record.phone : binding.data.phone,
+                connectedAt: binding.data.connectedAt || record.verifiedAt || null,
+                updatedAt: timestamp,
+              },
+              binding,
+            ),
+          ]
+        : [];
     const saved = await send(url.replace(/\/documents\/.*$/, '/documents:commit'), {
       method: 'POST',
-      headers,
+      headers: providerStore
+        ? { Authorization: providerStore.authorization, 'Content-Type': 'application/json' }
+        : headers,
       body: JSON.stringify({
         writes: [
+          ...bindingWrites,
           {
             update: {
               name: `projects/${env.projectId}/databases/(default)/documents/bpl_whatsappConnections/${uid}`,

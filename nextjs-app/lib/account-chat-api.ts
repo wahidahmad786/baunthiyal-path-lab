@@ -1,3 +1,6 @@
+import { providerDocument } from './whatsapp-provider';
+import { personalStatus, sendPersonal } from './personal-whatsapp';
+import { personalMessageId } from './personal-events';
 import { z } from 'zod';
 import { allowedRequestOrigin } from './request-origin';
 import { metaTestSender, replyBlockFor } from './chat-reply-state';
@@ -373,9 +376,34 @@ export async function handleAccountChat(
     const uid = store.uid;
     if (request.method === 'POST' && !canWrite)
       throw new ChatError(403, 'This team role has read-only access.');
-    const connection = await readChatConnection(store);
+    const binding = env.serviceAccountJson ? await providerDocument(store) : null;
+    const personal = binding?.data.mode === 'personal';
+    const personalState = personal ? await personalStatus(store) : null;
+    const connection = personal ? null : await readChatConnection(store);
     const webhookStatus = env.serviceAccountJson ? await store.read('inboxStatus/webhook') : null;
-    const configuration = inboxConfiguration(env, connection, uid, webhookStatus?.data || null);
+    const configuration = personal
+      ? {
+          provider: 'personal' as const,
+          configured: personalState?.status === 'connected',
+          senderPhone: personalState?.phone || binding?.data.phone || null,
+          senderName: 'Linked WhatsApp',
+          testSender: false,
+          connectionVerifiedAt: binding?.data.connectedAt || null,
+          reason:
+            personalState?.status === 'connected'
+              ? null
+              : personalState?.message || 'Reconnect linked WhatsApp.',
+          webhookUrl: null,
+          connectionVerified: personalState?.status === 'connected',
+          connectionVerifiedPreviously: !!binding?.data.locked,
+          webhookReady: false,
+          webhookPublicReady: false,
+          lastWebhookAt: null,
+        }
+      : {
+          provider: 'meta' as const,
+          ...inboxConfiguration(env, connection, uid, webhookStatus?.data || null),
+        };
     const path = new URL(request.url).pathname.replace(/\/$/, '');
     if (path === '/api/account/inbox' && request.method === 'GET') {
       const listed = await store.list('conversations', 'lastMessageAt desc', 500);
@@ -417,7 +445,7 @@ export async function handleAccountChat(
     if (request.method === 'GET' && !match[2]) {
       const listed = await store.list(`conversations/${id}/messages`, 'createdAt desc', 100);
       const matchingSender = existing?.data.phoneNumberId === connection?.phoneNumberId;
-      const windowOpen = matchingSender && chatWindowOpen(conversation.lastInboundAt);
+      const windowOpen = personal || (matchingSender && chatWindowOpen(conversation.lastInboundAt));
       const result: ChatDetailResponse = {
         ...configuration,
         workspaceId: uid,
@@ -452,8 +480,9 @@ export async function handleAccountChat(
     if (!configuration.configured)
       throw new ChatError(503, configuration.reason!, 'INBOX_NOT_ACTIVATED');
     if (
-      existing?.data.phoneNumberId !== connection?.phoneNumberId ||
-      !chatWindowOpen(conversation.lastInboundAt)
+      !personal &&
+      (existing?.data.phoneNumberId !== connection?.phoneNumberId ||
+        !chatWindowOpen(conversation.lastInboundAt))
     )
       throw new ChatError(
         409,
@@ -523,48 +552,57 @@ export async function handleAccountChat(
     let invalidToken = false;
     let uncertain = false;
     try {
-      const version = env.graphVersion || 'v23.0';
-      if (!/^v\d+\.\d+$/.test(version)) throw new Error();
-      const key = await crypto.subtle.importKey(
-        'raw',
-        encode(connection!.appSecret),
-        { name: 'HMAC', hash: 'SHA-256' },
-        false,
-        ['sign'],
-      );
-      const proof = Array.from(
-        new Uint8Array(await crypto.subtle.sign('HMAC', key, encode(connection!.accessToken))),
-        (byte) => byte.toString(16).padStart(2, '0'),
-      ).join('');
-      const url = new URL(
-        `https://graph.facebook.com/${version}/${connection!.phoneNumberId}/messages`,
-      );
-      url.searchParams.set('appsecret_proof', proof);
-      const response = await send(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${connection!.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          recipient_type: 'individual',
-          to: conversation.phone,
-          type: 'text',
-          text: { preview_url: false, body: text },
-        }),
-        signal: AbortSignal.timeout(20000),
-      });
-      const result = await response.json();
-      if (!response.ok) {
-        invalidToken = [190, 102, 104].includes(Number(result.error?.code));
-        uncertain = response.status >= 500;
-        safeError = metaReplyError(Number(result.error?.code), uncertain);
-      } else if (typeof result.messages?.[0]?.id === 'string') metaId = result.messages[0].id;
-      else {
-        uncertain = true;
-        safeError =
-          'Meta did not return a message ID. Acceptance is uncertain; do not automatically resend.';
+      if (personal) {
+        metaId = await sendPersonal(
+          store,
+          conversation.phone,
+          text,
+          `BPL${requestId.replaceAll('-', '').toUpperCase()}`,
+        );
+      } else {
+        const version = env.graphVersion || 'v23.0';
+        if (!/^v\d+\.\d+$/.test(version)) throw new Error();
+        const key = await crypto.subtle.importKey(
+          'raw',
+          encode(connection!.appSecret),
+          { name: 'HMAC', hash: 'SHA-256' },
+          false,
+          ['sign'],
+        );
+        const proof = Array.from(
+          new Uint8Array(await crypto.subtle.sign('HMAC', key, encode(connection!.accessToken))),
+          (byte) => byte.toString(16).padStart(2, '0'),
+        ).join('');
+        const url = new URL(
+          `https://graph.facebook.com/${version}/${connection!.phoneNumberId}/messages`,
+        );
+        url.searchParams.set('appsecret_proof', proof);
+        const response = await send(url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${connection!.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: conversation.phone,
+            type: 'text',
+            text: { preview_url: false, body: text },
+          }),
+          signal: AbortSignal.timeout(20000),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          invalidToken = [190, 102, 104].includes(Number(result.error?.code));
+          uncertain = response.status >= 500;
+          safeError = metaReplyError(Number(result.error?.code), uncertain);
+        } else if (typeof result.messages?.[0]?.id === 'string') metaId = result.messages[0].id;
+        else {
+          uncertain = true;
+          safeError =
+            'Meta did not return a message ID. Acceptance is uncertain; do not automatically resend.';
+        }
       }
     } catch {
       uncertain = true;
@@ -593,7 +631,9 @@ export async function handleAccountChat(
             : 'SEND_REJECTED',
       );
     }
-    const messageId = `meta-${await chatHash(metaId)}`;
+    const messageId = personal
+      ? await personalMessageId(conversation.phone, metaId)
+      : `meta-${await chatHash(metaId)}`;
     let accepted: ChatMessage | null = null;
     for (let attempt = 0; attempt < 4; attempt++) {
       const [observed, latestConversation, requestDoc] = await Promise.all([
@@ -622,7 +662,7 @@ export async function handleAccountChat(
       const summary = {
         ownerId: uid,
         ...current,
-        phoneNumberId: connection!.phoneNumberId,
+        ...(personal ? { provider: 'personal' } : { phoneNumberId: connection!.phoneNumberId }),
         ...(isLatest
           ? {
               lastMessagePreview: text.slice(0, 240),

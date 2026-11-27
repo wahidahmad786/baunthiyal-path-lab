@@ -357,6 +357,7 @@ export default function WhatsAppInbox({
     area.scrollTop = area.scrollHeight;
   }, [selected, latestMessage?.id]);
 
+  const personalConnection = (detail?.provider ?? inbox?.provider) === 'personal';
   const configured = detail?.configured ?? inbox?.configured ?? false;
   const windowOpen = !!detail?.windowOpen;
   const canWrite =
@@ -520,15 +521,23 @@ export default function WhatsAppInbox({
           role="status"
         >
           <div>
-            <strong>API sending number: {senderPhone}</strong>
+            <strong>
+              {personalConnection ? 'Linked WhatsApp number' : 'API sending number'}: {senderPhone}
+            </strong>
             <span>
-              {testSender ? 'Meta test number' : inbox?.senderName || 'Connected business number'}
+              {personalConnection
+                ? 'Personal / mobile WhatsApp'
+                : testSender
+                  ? 'Meta test number'
+                  : inbox?.senderName || 'Connected business number'}
             </span>
           </div>
           <p>
-            {testSender
-              ? 'This API is connected to a Meta test number. It supports the test recipients added in Meta, and is not your lab’s mobile WhatsApp number. To use your lab number while keeping its WhatsApp Business app, use supported Coexistence onboarding.'
-              : 'API messages use this number. A verified connection does not open a reply window for every customer.'}
+            {personalConnection
+              ? 'Individual messages use your linked WhatsApp. Manage this device from WhatsApp → Linked devices on your phone.'
+              : testSender
+                ? 'This API is connected to a Meta test number. It supports the test recipients added in Meta, and is not your lab’s mobile WhatsApp number. To use your lab number while keeping its WhatsApp Business app, use supported Coexistence onboarding.'
+                : 'API messages use this number. A verified connection does not open a reply window for every customer.'}
           </p>
           {onOpenIntegration && isOwnWorkspace && (
             <button className="text-button" type="button" onClick={onOpenIntegration}>
@@ -793,8 +802,9 @@ export default function WhatsAppInbox({
                       </span>
                       <h3>No portal message recorded</h3>
                       <p>
-                        Messages received through the connected WhatsApp API will appear here.
-                        Existing chats in the WhatsApp app are not automatically imported.
+                        {personalConnection
+                          ? 'New messages from your linked WhatsApp will appear here. Existing phone chat history is not imported.'
+                          : 'Messages received through the connected WhatsApp API will appear here. Existing chats in the WhatsApp app are not automatically imported.'}
                       </p>
                       {activeContact && (
                         <a

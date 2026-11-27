@@ -1,3 +1,4 @@
+import { requireMetaProvider } from './whatsapp-provider';
 import { z } from 'zod';
 import {
   ChatError,
@@ -167,6 +168,7 @@ export async function handleTemplateManager(
       .replace(/^\/api\/account\/templates\/?/, '')
       .split('/')
       .filter(Boolean);
+    await requireMetaProvider(store);
     const connection = await readChatConnection(store);
     if (!path.length && request.method === 'GET') {
       const [drafts, records, sync] = await Promise.all([

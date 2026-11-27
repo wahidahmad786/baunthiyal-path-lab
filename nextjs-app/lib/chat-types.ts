@@ -43,6 +43,7 @@ export type ChatReplyBlock = {
   message: string;
 };
 export type ChatInboxResponse = {
+  provider?: 'meta' | 'personal';
   metadata?: Record<string, import('./crm-types').ConversationMeta>;
   workspaceId?: string;
   role?: 'owner' | 'staff' | 'viewer';
@@ -63,6 +64,7 @@ export type ChatInboxResponse = {
   truncated?: boolean;
 };
 export type ChatDetailResponse = {
+  provider?: 'meta' | 'personal';
   workspaceId?: string;
   role?: 'owner' | 'staff' | 'viewer';
   canWrite?: boolean;

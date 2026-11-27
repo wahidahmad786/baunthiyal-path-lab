@@ -1,7 +1,8 @@
-FROM node:22-bookworm-slim AS dependencies
+FROM node:24-bookworm-slim AS dependencies
 WORKDIR /app
 ARG APP_SOURCE=.
 COPY ${APP_SOURCE}/package.json ${APP_SOURCE}/package-lock.json ./
+COPY ${APP_SOURCE}/scripts/patch-signal-logs.mjs ./scripts/patch-signal-logs.mjs
 RUN npm ci --no-audit --no-fund
 
 FROM dependencies AS builder
@@ -17,7 +18,7 @@ ENV NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=$NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
 ENV NEXT_PUBLIC_FIREBASE_PROJECT_ID=$NEXT_PUBLIC_FIREBASE_PROJECT_ID
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runner
+FROM node:24-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=8080
 COPY --from=builder --chown=node:node /app/.next/standalone ./

@@ -1,3 +1,4 @@
+import { requireMetaProvider, providerPath } from './whatsapp-provider';
 import {
   ChatError,
   ChatStore,
@@ -191,6 +192,7 @@ export async function handleEmbeddedSignup(
     if (action !== 'check' && !status.ready)
       throw new ChatError(503, status.reason!, 'EMBEDDED_SIGNUP_NOT_READY');
     const store = await ChatStore.open(env, identity.uid, send, identity.token, true);
+    await requireMetaProvider(store, action !== 'check');
     if (action === 'check') {
       const record = await readChatConnection(store);
       if (!record) throw new ChatError(409, 'Connect WhatsApp first.');
@@ -430,7 +432,23 @@ export async function handleEmbeddedSignup(
       finalSession.data.stateHash !== (await chatHash(input.sessionId))
     )
       throw new ChatError(409, 'Meta has not verified the account callback yet. Please reconnect.');
+    const providerBinding = await requireMetaProvider(store, true);
     await store.commit([
+      ...(providerBinding
+        ? [
+            store.write(
+              providerPath,
+              {
+                ...providerBinding.data,
+                locked: true,
+                phone: record.phone,
+                connectedAt: providerBinding.data.connectedAt || at(),
+                updatedAt: at(),
+              },
+              providerBinding,
+            ),
+          ]
+        : []),
       {
         update: {
           name: `projects/${env.projectId}/databases/(default)/documents/bpl_whatsappConnections/${identity.uid}`,

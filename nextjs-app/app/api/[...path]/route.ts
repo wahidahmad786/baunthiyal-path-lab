@@ -1,3 +1,4 @@
+import { handleWhatsAppProvider } from '@/lib/whatsapp-provider-api';
 import { NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
 import { z } from 'zod';
@@ -108,6 +109,7 @@ export async function GET(request: NextRequest, context: Context) {
   try {
     const p = (await context.params).path;
     const key = p.join('/');
+    if (key === 'whatsapp/provider') return handleWhatsAppProvider(request, accountEnvironment(true));
     if (p[0] === 'account' && p[1] === 'team') return handleTeam(request, accountEnvironment(true));
     if (p[0] === 'account' && p[1] === 'templates')
       return handleTemplateManager(request, accountEnvironment(true));
@@ -228,6 +230,7 @@ export async function POST(request: NextRequest, context: Context) {
   try {
     const p = (await context.params).path;
     const key = p.join('/');
+    if (key === 'whatsapp/provider') return handleWhatsAppProvider(request, accountEnvironment(true));
     if (p[0] === 'account' && p[1] === 'team') return handleTeam(request, accountEnvironment(true));
     if (p[0] === 'account' && p[1] === 'templates')
       return handleTemplateManager(request, accountEnvironment(true));

@@ -14,9 +14,11 @@
     "setup:check": "node scripts/check-setup.mjs",
     "setup:verify": "node scripts/check-setup.mjs --live",
     "setup:scheduler": "node scripts/setup-scheduler.mjs",
-    "setup:firebase": "node scripts/connect-firebase.mjs"
+    "setup:firebase": "node scripts/connect-firebase.mjs",
+    "postinstall": "node scripts/patch-signal-logs.mjs"
   },
   "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14",
     "exceljs": "^4.4.0",
     "firebase": "^13.2.0",
     "firebase-admin": "^14.5.0",
@@ -25,6 +27,8 @@
     "lucide-react": "^0.468.0",
     "next": "^16.0.0",
     "pdf-lib": "^1.17.1",
+    "pino": "9.14.0",
+    "qrcode": "1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "server-only": "^0.0.1",
@@ -32,6 +36,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "firebase-tools": "^15.35.0",

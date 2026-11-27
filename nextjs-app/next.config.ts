@@ -2,7 +2,13 @@ import type { NextConfig } from 'next';
 const config: NextConfig = {
   output: 'standalone',
   poweredByHeader: false,
-  serverExternalPackages: ['firebase-admin', 'exceljs'],
+  serverExternalPackages: [
+    'firebase-admin',
+    'exceljs',
+    '@whiskeysockets/baileys',
+    'pino',
+    'qrcode',
+  ],
   async headers() {
     return [
       {
