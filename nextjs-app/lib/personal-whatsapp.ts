@@ -13,10 +13,11 @@ import { ChatError, ChatStore } from './account-chat-api';
 import { getServiceAccessToken } from './google-service-account';
 import { PersonalAuthStore } from './personal-auth';
 import { lockProvider, providerDocument, reserveProvider } from './whatsapp-provider';
-import { capturePersonalImage, isPersonalPhoto } from './personal-image';
+import { describePersonalAttachment } from './personal-image';
 import { personalPhone, recordPersonalMessage, recordPersonalReceipt } from './personal-events';
 import type { ChatEnvironment } from './chat-types';
 import type { WASocket } from '@whiskeysockets/baileys';
+import { whatsappAttachmentContent, type UploadAttachment } from './personal-attachment-send';
 export type PersonalStatus = {
   status:
     | 'idle'
@@ -463,19 +464,17 @@ async function connectSocket(session: Session) {
           content.senderKeyDistributionMessage
         )
           continue;
-        const isPhoto = isPersonalPhoto(message);
-        const text = isPhoto
-          ? content.imageMessage?.caption || ''
-          : content.imageMessage
-            ? '[Private photo — open in WhatsApp]'
-            : content.conversation ||
-              content.extendedTextMessage?.text ||
-              content.videoMessage?.caption ||
-              (content.audioMessage
-                ? '[Audio received]'
-                : content.documentMessage
-                  ? '[Document received]'
-                  : '[WhatsApp attachment]');
+        const captured = describePersonalAttachment(message);
+        const text = captured
+          ? captured.caption
+          : content.imageMessage ||
+              content.videoMessage ||
+              content.ptvMessage ||
+              content.audioMessage ||
+              content.documentMessage ||
+              content.stickerMessage
+            ? '[Private attachment — open in WhatsApp]'
+            : content.conversation || content.extendedTextMessage?.text || '[WhatsApp attachment]';
         const seconds = Number(message.messageTimestamp || 0),
           at =
             seconds > 0 && seconds * 1000 <= Date.now() + 60000
@@ -490,8 +489,8 @@ async function connectSocket(session: Session) {
           name: message.pushName || undefined,
           at,
           status: message.key.fromMe ? 'sent' : 'received',
-          isPhoto,
-          image: isPhoto ? capturePersonalImage(message) : undefined,
+          attachment: captured?.attachment,
+          media: captured?.media,
           allowOptOut: seconds * 1000 >= session.linkedSince - 1000,
         });
       }
@@ -739,6 +738,7 @@ export async function sendPersonal(
   phone: string,
   text: string,
   providerId: string,
+  upload?: UploadAttachment,
 ) {
   const session = runtime.sessions.get(store.uid);
   if (!session?.socket || session.stopped || session.state.status !== 'connected')
@@ -749,7 +749,7 @@ export async function sendPersonal(
   await assertLease(session);
   const result = await session.socket.sendMessage(
     `${phone}@s.whatsapp.net`,
-    { text },
+    upload ? whatsappAttachmentContent(upload) : { text },
     { messageId: providerId },
   );
   if (!result?.key.id)
@@ -758,6 +758,7 @@ export async function sendPersonal(
       'WhatsApp did not confirm this message. Check its status before trying again.',
       'SEND_INDETERMINATE',
     );
+  const persisted = upload ? describePersonalAttachment(result) : undefined;
   await recordPersonalMessage(store, {
     phone,
     providerId: result.key.id,
@@ -765,6 +766,17 @@ export async function sendPersonal(
     outbound: true,
     at: now(),
     status: 'accepted',
+    ...(upload
+      ? {
+          attachment: persisted?.attachment || {
+            kind: upload.kind,
+            mime: upload.mime,
+            name: upload.name,
+            available: false,
+          },
+          media: persisted?.media,
+        }
+      : {}),
   });
   return result.key.id;
 }

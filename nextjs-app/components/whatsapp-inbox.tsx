@@ -8,10 +8,10 @@ import {
   CheckCheck,
   Clock3,
   ExternalLink,
-  ImageIcon,
   ListFilter,
   LoaderCircle,
   MessageCircle,
+  Paperclip,
   Plus,
   RefreshCw,
   Search,
@@ -33,6 +33,16 @@ import { replyBlockFor } from '@/lib/chat-reply-state';
 import styles from './whatsapp-inbox.module.css';
 import TeamConversationTools, { workspacePath } from './team-conversation-tools';
 import WhatsAppNewChat from './whatsapp-new-chat';
+import {
+  acceptedAttachmentFiles,
+  AttachmentDraftPreview,
+  InboxAttachmentView,
+  maxAttachmentCaption,
+  messageAttachment,
+  uploadInboxAttachment,
+  validateAttachmentFile,
+  type AttachmentFile,
+} from './whatsapp-inbox-attachments';
 import type { ConversationMeta, TeamContext } from '@/lib/crm-types';
 
 type InboxResponse = ChatInboxResponse;
@@ -200,29 +210,6 @@ function ChatAvatar({ name, path }: { name: string; path?: string }) {
     </span>
   );
 }
-function ChatPhoto({ path }: { path?: string }) {
-  const image = usePrivateImage(path);
-  const [broken, setBroken] = useState('');
-  return (
-    <span className={styles.photo} ref={image.anchor}>
-      {image.url && image.url !== broken ? (
-        <a href={image.url} target="_blank" rel="noopener noreferrer" aria-label="Open full photo">
-          <img
-            src={image.url}
-            alt="WhatsApp photo"
-            decoding="async"
-            onError={() => setBroken(image.url || '')}
-          />
-        </a>
-      ) : (
-        <span className={styles.photoUnavailable}>
-          <ImageIcon size={17} />
-          {image.pending ? 'Loading photo…' : 'Photo unavailable'}
-        </span>
-      )}
-    </span>
-  );
-}
 function chatLink(phone: string, text = '') {
   const digits = phone.replace(/\D/g, '');
   return `https://wa.me/${digits}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
@@ -277,6 +264,18 @@ export default function WhatsAppInbox({
   const [inboxError, setInboxError] = useState('');
   const [detailError, setDetailError] = useState('');
   const [text, setText] = useState('');
+  const [attachmentDraft, setAttachmentDraft] = useState<AttachmentFile | null>(null);
+  const [caption, setCaption] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
+  const captionInput = useRef<HTMLTextAreaElement>(null);
+  const attachmentAttempt = useRef<{
+    customerId: string;
+    workspace: string;
+    file: File;
+    caption: string;
+    requestId: string;
+  } | null>(null);
+  const sendInFlight = useRef(false);
   const [sending, setSending] = useState(false);
   const [newChat, setNewChat] = useState(false),
     [syncBusy, setSyncBusy] = useState(false),
@@ -327,6 +326,7 @@ export default function WhatsAppInbox({
     setNewChat(false);
     setSyncError('');
     setText('');
+    clearAttachment();
     sendAttempt.current = null;
     setAssignmentFilter('all');
     setLabelFilter('');
@@ -462,6 +462,7 @@ export default function WhatsAppInbox({
     setDetailError('');
     setSendError('');
     setText('');
+    clearAttachment();
     sendAttempt.current = null;
     if (!selected) return;
     void refreshDetail(selected);
@@ -558,6 +559,8 @@ export default function WhatsAppInbox({
     (detail?.canWrite ?? inbox?.canWrite ?? team?.canWrite) !== false &&
     (isOwnWorkspace || !!team?.canWrite);
   const canReply = canWrite && configured && windowOpen && !!activeContact && !detailError;
+  const canAttach = personalConnection && canReply;
+  const draftCanHaveCaption = attachmentDraft && attachmentDraft.kind !== 'audio';
   const reason = detail?.reason || inbox?.reason;
   const senderPhone = detail?.senderPhone || inbox?.senderPhone;
   const replyBlock =
@@ -572,28 +575,75 @@ export default function WhatsAppInbox({
         })
       : null);
 
+  function clearAttachment() {
+    setAttachmentDraft(null);
+    setCaption('');
+    attachmentAttempt.current = null;
+    if (fileInput.current) fileInput.current.value = '';
+  }
+
+  function chooseAttachment(file?: File) {
+    if (!file || !canAttach || sendInFlight.current) return;
+    try {
+      const next = validateAttachmentFile(file);
+      setAttachmentDraft(next);
+      if (next.kind === 'audio') setCaption('');
+      attachmentAttempt.current = null;
+      setSendError('');
+      if (next.kind !== 'audio') requestAnimationFrame(() => captionInput.current?.focus());
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : 'Could not attach this file.');
+    }
+  }
+
   async function sendMessage() {
     const id = selected;
-    const value = text.trim();
+    const draft = attachmentDraft;
+    const value = (draftCanHaveCaption ? caption : draft ? '' : text).trim();
     const uid = labClientAuth().currentUser?.uid;
-    if (!id || !uid || !value || !canReply || sending) return;
-    if (
-      !sendAttempt.current ||
-      sendAttempt.current.customerId !== id ||
-      sendAttempt.current.text !== value
-    )
-      sendAttempt.current = { customerId: id, text: value, requestId: crypto.randomUUID() };
-    const attempt = sendAttempt.current;
+    if (!id || !uid || !canReply || (draft ? !canAttach : !value) || sendInFlight.current) return;
+    sendInFlight.current = true;
     setSending(true);
     setSendError('');
     try {
-      const result = await accountApi<{ message: ChatMessage }>(
-        workspacePath(`account/inbox/${id}/send`, workspace),
-        {
-          text: value,
-          requestId: attempt.requestId,
-        },
-      );
+      let result: { message: ChatMessage };
+      if (draft) {
+        const existing = attachmentAttempt.current;
+        const requestId =
+          existing?.customerId === id &&
+          existing.workspace === workspace &&
+          existing.file === draft.file &&
+          existing.caption === value
+            ? existing.requestId
+            : crypto.randomUUID();
+        attachmentAttempt.current = {
+          customerId: id,
+          workspace,
+          file: draft.file,
+          caption: value,
+          requestId,
+        };
+        result = await uploadInboxAttachment(
+          workspacePath(
+            '/api/account/inbox/' + encodeURIComponent(id) + '/send-attachment',
+            workspace,
+          ),
+          draft.file,
+          value,
+          requestId,
+        );
+      } else {
+        if (
+          !sendAttempt.current ||
+          sendAttempt.current.customerId !== id ||
+          sendAttempt.current.text !== value
+        )
+          sendAttempt.current = { customerId: id, text: value, requestId: crypto.randomUUID() };
+        result = await accountApi<{ message: ChatMessage }>(
+          workspacePath(`account/inbox/${id}/send`, workspace),
+          { text: value, requestId: sendAttempt.current.requestId },
+        );
+      }
       if (
         labClientAuth().currentUser?.uid !== uid ||
         selectedRef.current !== id ||
@@ -605,8 +655,7 @@ export default function WhatsAppInbox({
           ? {
               ...current,
               recorded: true,
-              // A signed status may already have arrived while the send response was in flight.
-              // Keep its recorded state, then refresh the authoritative history below.
+              // A delivery status may already have arrived from the provider while the send was in flight.
               messages: current.messages.some((message) => message.id === result.message.id)
                 ? current.messages
                 : [...current.messages, result.message],
@@ -614,23 +663,33 @@ export default function WhatsAppInbox({
           : current,
       );
       if (['accepted', 'sent', 'delivered', 'read'].includes(result.message.status)) {
-        setText('');
-        sendAttempt.current = null;
+        if (draft) clearAttachment();
+        else {
+          setText('');
+          sendAttempt.current = null;
+        }
       } else {
         setSendError(
           result.message.error ||
-            'This message has not been confirmed as sent. Check its recorded status before trying again.',
+            (draft
+              ? 'This file has not been confirmed as sent. Check the message status before clicking Send again.'
+              : 'This message has not been confirmed as sent. Check its recorded status before trying again.'),
         );
       }
       void refreshInbox(true);
       void refreshDetail(id, true);
     } catch (error) {
-      if (labClientAuth().currentUser?.uid === uid && selectedRef.current === id) {
+      if (
+        labClientAuth().currentUser?.uid === uid &&
+        selectedRef.current === id &&
+        workspaceRef.current === workspace
+      ) {
         setSendError(error instanceof Error ? error.message : 'Unable to send your message.');
         // Read the persisted attempt; a lost response never becomes a fabricated sent state.
         void refreshDetail(id, true);
       }
     } finally {
+      sendInFlight.current = false;
       setSending(false);
     }
   }
@@ -998,9 +1057,9 @@ export default function WhatsAppInbox({
                 ) : messages.length ? (
                   messages.map((message, index) => {
                     const day = messageDay(message.createdAt);
-                    const isPhoto = (message.type as string) === 'image';
-                    const imageAvailable = (message as ChatMessage & { imageAvailable?: boolean })
-                      .imageAvailable;
+                    const attachment = messageAttachment(message);
+                    const hasLegacyImage =
+                      message.type === 'image' && !(message as { attachment?: unknown }).attachment;
                     const showDay =
                       index === 0 || day !== messageDay(messages[index - 1].createdAt);
                     return (
@@ -1014,23 +1073,24 @@ export default function WhatsAppInbox({
                           className={`${styles.messageRow} ${message.direction === 'outbound' ? styles.outbound : styles.inbound}`}
                         >
                           <article className={styles.bubble}>
-                            {isPhoto && (
-                              <ChatPhoto
+                            {attachment && (
+                              <InboxAttachmentView
+                                attachment={attachment}
                                 path={
-                                  imageAvailable && activeContact
+                                  attachment.available && activeContact
                                     ? workspacePath(
                                         '/api/account/inbox/' +
                                           encodeURIComponent(activeContact.id) +
                                           '/messages/' +
                                           encodeURIComponent(message.id) +
-                                          '/image',
+                                          (hasLegacyImage ? '/image' : '/attachment'),
                                         workspace,
                                       )
                                     : undefined
                                 }
                               />
                             )}
-                            {(message.text || (!isPhoto && message.type === 'unsupported')) && (
+                            {(message.text || (!attachment && message.type === 'unsupported')) && (
                               <p>{message.text || 'This message type is not available here.'}</p>
                             )}
                             <div className={styles.messageMeta}>
@@ -1044,19 +1104,21 @@ export default function WhatsAppInbox({
                             {message.error && (
                               <small className={styles.messageError}>{message.error}</small>
                             )}
-                            {message.direction === 'outbound' && message.status === 'failed' && (
-                              <button
-                                type="button"
-                                className={styles.retry}
-                                onClick={() => {
-                                  setText(message.text);
-                                  setSendError('');
-                                  sendAttempt.current = null;
-                                }}
-                              >
-                                Retry in composer
-                              </button>
-                            )}
+                            {!attachment &&
+                              message.direction === 'outbound' &&
+                              message.status === 'failed' && (
+                                <button
+                                  type="button"
+                                  className={styles.retry}
+                                  onClick={() => {
+                                    setText(message.text);
+                                    setSendError('');
+                                    sendAttempt.current = null;
+                                  }}
+                                >
+                                  Retry in composer
+                                </button>
+                              )}
                           </article>
                         </div>
                       </div>
@@ -1117,59 +1179,109 @@ export default function WhatsAppInbox({
                     </span>
                   </div>
                 )}
-                <div className={styles.composerInput}>
-                  <textarea
-                    aria-label="WhatsApp reply"
-                    aria-describedby={
-                      !canReply && !detailLoading ? 'whatsapp-reply-requirement' : undefined
-                    }
-                    placeholder={
-                      !canWrite
-                        ? 'Read-only team access'
-                        : canReply
-                          ? personalConnection
-                            ? 'Type a message…'
-                            : 'Type an API reply…'
-                          : personalConnection
-                            ? 'Connect WhatsApp to send your message…'
-                            : 'Draft a message for the WhatsApp app (API reply unavailable)…'
-                    }
-                    value={text}
-                    maxLength={4096}
-                    rows={1}
-                    disabled={sending || !canWrite}
-                    onChange={(event) => {
-                      setText(event.target.value);
+                {attachmentDraft && (
+                  <AttachmentDraftPreview
+                    draft={attachmentDraft}
+                    disabled={sending}
+                    onRemove={() => {
+                      clearAttachment();
                       setSendError('');
                     }}
-                    onKeyDown={(event) => {
-                      if (
-                        event.key === 'Enter' &&
-                        !event.shiftKey &&
-                        !event.nativeEvent.isComposing &&
-                        canReply
-                      ) {
-                        event.preventDefault();
-                        void sendMessage();
-                      }
-                    }}
                   />
+                )}
+                <div className={styles.composerInput}>
+                  {personalConnection && canWrite && (
+                    <>
+                      <input
+                        ref={fileInput}
+                        type="file"
+                        hidden
+                        aria-label="Choose a file"
+                        accept={acceptedAttachmentFiles}
+                        onChange={(event) => {
+                          chooseAttachment(event.currentTarget.files?.[0]);
+                          event.currentTarget.value = '';
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className={`${styles.iconAction} ${styles.attachButton}`}
+                        onClick={() => fileInput.current?.click()}
+                        disabled={!canAttach || sending}
+                        aria-label="Attach a file"
+                        title="Attach a file (up to 16 MB)"
+                      >
+                        <Paperclip size={21} aria-hidden="true" />
+                      </button>
+                    </>
+                  )}
+                  {draftCanHaveCaption ? (
+                    <textarea
+                      ref={captionInput}
+                      aria-label="Attachment caption"
+                      placeholder="Add a caption (optional)…"
+                      value={caption}
+                      maxLength={maxAttachmentCaption}
+                      rows={1}
+                      disabled={sending || !canAttach}
+                      onChange={(event) => {
+                        setCaption(event.target.value);
+                        setSendError('');
+                      }}
+                    />
+                  ) : !attachmentDraft ? (
+                    <textarea
+                      aria-label="WhatsApp reply"
+                      aria-describedby={
+                        !canReply && !detailLoading ? 'whatsapp-reply-requirement' : undefined
+                      }
+                      placeholder={
+                        !canWrite
+                          ? 'Read-only team access'
+                          : canReply
+                            ? personalConnection
+                              ? 'Type a message…'
+                              : 'Type an API reply…'
+                            : personalConnection
+                              ? 'Connect WhatsApp to send your message…'
+                              : 'Draft a message for the WhatsApp app (API reply unavailable)…'
+                      }
+                      value={text}
+                      maxLength={4096}
+                      rows={1}
+                      disabled={sending || !canWrite}
+                      onChange={(event) => {
+                        setText(event.target.value);
+                        setSendError('');
+                      }}
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === 'Enter' &&
+                          !event.shiftKey &&
+                          !event.nativeEvent.isComposing &&
+                          canReply
+                        ) {
+                          event.preventDefault();
+                          void sendMessage();
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span className={styles.captionUnavailable}>
+                      Audio sends without a caption.
+                    </span>
+                  )}
                   <button
                     type="submit"
                     className={styles.sendButton}
-                    disabled={!canReply || !text.trim() || sending}
-                    aria-label="Send WhatsApp reply"
-                    title={
-                      !canReply
-                        ? replyBlock?.title ||
-                          (personalConnection ? 'WhatsApp unavailable' : 'API reply unavailable')
-                        : 'Send reply'
-                    }
+                    disabled={sending || (attachmentDraft ? !canAttach : !canReply || !text.trim())}
+                    aria-label={attachmentDraft ? 'Send WhatsApp file' : 'Send WhatsApp reply'}
+                    title={attachmentDraft ? 'Send file' : 'Send reply'}
                   >
                     {sending ? <LoaderCircle className="spin" size={20} /> : <Send size={20} />}
                   </button>
                 </div>
-                {canWrite && !canReply && activeContact && text.trim() && (
+                {!attachmentDraft && canWrite && !canReply && activeContact && text.trim() && (
                   <a
                     className={`button secondary small-button ${styles.manualDraft}`}
                     href={chatLink(activeContact.phone, text.trim())}

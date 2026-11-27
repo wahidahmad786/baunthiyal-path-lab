@@ -1,10 +1,17 @@
 export type ChatMessageStatus =
   'received' | 'submitting' | 'accepted' | 'sent' | 'delivered' | 'read' | 'failed' | 'unknown';
+export type ChatAttachment = {
+  kind: 'image' | 'video' | 'audio' | 'voice' | 'document' | 'sticker';
+  mime?: string;
+  name?: string;
+  available: boolean;
+};
 export type ChatMessage = {
   id: string;
   metaId?: string;
   direction: 'inbound' | 'outbound';
-  type: 'text' | 'template' | 'unsupported' | 'image';
+  type: 'text' | 'template' | 'unsupported' | 'image' | 'attachment';
+  attachment?: ChatAttachment;
   imageAvailable?: boolean;
   text: string;
   status: ChatMessageStatus;

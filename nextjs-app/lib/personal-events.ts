@@ -6,8 +6,13 @@ import {
   conversationFrom,
   nextChatStatus,
 } from './account-chat-api';
-import type { PersonalImage } from './personal-image';
-import type { ChatMessageStatus } from './chat-types';
+import {
+  attachmentFromRecord,
+  attachmentLabel,
+  mergePersonalMedia,
+  type PersonalMedia,
+} from './personal-image';
+import type { ChatAttachment, ChatMessageStatus } from './chat-types';
 export function personalPhone(jid?: string | null) {
   if (!jid || !/^\d+(?::\d+)?@s\.whatsapp\.net$/.test(jid)) return null;
   const phone = jid.split('@')[0].split(':')[0];
@@ -26,8 +31,8 @@ export async function recordPersonalMessage(
     at: string;
     status: ChatMessageStatus;
     allowOptOut?: boolean;
-    isPhoto?: boolean;
-    image?: PersonalImage;
+    attachment?: ChatAttachment;
+    media?: PersonalMedia;
   },
 ) {
   const id = (await chatHash(event.phone)).slice(0, 32);
@@ -61,6 +66,24 @@ export async function recordPersonalMessage(
       receipt && event.outbound
         ? nextChatStatus(observedStatus, receipt.data.status)
         : observedStatus;
+    const previousAttachment = attachmentFromRecord(message?.data.attachment);
+    const baseAttachment = event.attachment || previousAttachment;
+    const attachment = baseAttachment && {
+      ...baseAttachment,
+      available:
+        baseAttachment.available ||
+        !!previousAttachment?.available ||
+        (baseAttachment.kind === 'image' && message?.data.imageAvailable === true),
+    };
+    const type =
+      attachment?.kind === 'image' || (!attachment && message?.data.type === 'image')
+        ? 'image'
+        : attachment
+          ? 'attachment'
+          : 'text';
+    const text = (
+      !event.attachment && type !== 'text' ? String(message?.data.text || '') : event.text
+    ).slice(0, 4096);
     const writes = [
       store.write(
         `conversations/${id}/messages/${messageId}`,
@@ -70,12 +93,13 @@ export async function recordPersonalMessage(
           provider: 'personal',
           personalId: event.providerId,
           direction: event.outbound ? 'outbound' : 'inbound',
-          type: event.isPhoto || message?.data.type === 'image' ? 'image' : 'text',
-          imageAvailable: event.image ? true : message?.data.imageAvailable === true || undefined,
-          text: (!event.isPhoto && message?.data.type === 'image'
-            ? String(message.data.text || '')
-            : event.text
-          ).slice(0, 4096),
+          type,
+          ...(attachment ? { attachment } : {}),
+          imageAvailable:
+            (type === 'image' &&
+              (attachment?.available || message?.data.imageAvailable === true)) ||
+            undefined,
+          text,
           createdAt: message?.data.createdAt || event.at,
           status,
         },
@@ -89,7 +113,10 @@ export async function recordPersonalMessage(
           provider: 'personal',
           ...(isLatest
             ? {
-                lastMessagePreview: (event.text || (event.isPhoto ? 'Photo' : '')).slice(0, 240),
+                lastMessagePreview: (
+                  text ||
+                  (attachment ? attachmentLabel(attachment.kind) : type === 'image' ? 'Photo' : '')
+                ).slice(0, 240),
                 lastMessageAt: event.at,
                 lastMessageStatus: status,
               }
@@ -102,22 +129,34 @@ export async function recordPersonalMessage(
         conversation,
       ),
     ];
-    if (event.image)
+    if (event.media) {
+      const path = `personalMessageMedia/${messageId}`;
+      const slot = `media:${id}:${messageId}`;
+      const saved = message ? await store.read(path) : null;
+      let previous: PersonalMedia | undefined;
+      if (saved) {
+        try {
+          previous = JSON.parse(openPersonal(saved.data, store.uid, slot, store.env.encryptionKey));
+        } catch {
+          /* New data can replace an unreadable old record. */
+        }
+      }
       writes.push(
         store.write(
-          `personalMessageImages/${messageId}`,
+          path,
           sealPersonal(
-            JSON.stringify(event.image),
+            JSON.stringify(mergePersonalMedia(previous, event.media)),
             store.uid,
-            `image:${id}:${messageId}`,
+            slot,
             store.env.encryptionKey,
           ),
-          undefined,
+          saved || undefined,
         ),
       );
+    }
     if (
       !message &&
-      !event.isPhoto &&
+      type === 'text' &&
       !event.outbound &&
       event.allowOptOut &&
       /^STOP$/i.test(event.text.trim()) &&

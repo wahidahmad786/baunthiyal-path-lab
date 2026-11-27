@@ -2,8 +2,14 @@ import { readPersonalHistory, personalHistoryStatus } from './personal-history';
 import { providerDocument } from './whatsapp-provider';
 import { personalStatus, sendPersonal, requestPersonalHistory } from './personal-whatsapp';
 import { personalMessageId } from './personal-events';
+import { parseAttachmentUpload, reserveAttachmentUpload } from './personal-attachment-send';
 import { openPersonal } from './personal-auth';
-import { personalImageBytes, type PersonalImage } from './personal-image';
+import {
+  attachmentFromRecord,
+  oldPersonalImage,
+  personalMediaBytes,
+  type PersonalMedia,
+} from './personal-image';
 import { z } from 'zod';
 import { normalizePhone } from './domain';
 import { allowedRequestOrigin } from './request-origin';
@@ -284,11 +290,17 @@ export function conversationFrom(record: Record<string, any>, id: string): ChatC
   };
 }
 export function messageFrom(record: Record<string, any>, id: string): ChatMessage {
+  const attachment =
+    attachmentFromRecord(record.attachment) ||
+    (record.type === 'image'
+      ? { kind: 'image' as const, available: record.imageAvailable === true }
+      : undefined);
   return {
     id,
     ...(record.metaId ? { metaId: record.metaId } : {}),
     direction: record.direction,
     type: record.type || 'text',
+    ...(attachment ? { attachment } : {}),
     ...(record.type === 'image' && record.imageAvailable === true ? { imageAvailable: true } : {}),
     text: String(record.text || ''),
     status: record.status,
@@ -407,6 +419,7 @@ export async function handleAccountChat(
   env: ChatEnvironment,
   send: typeof fetch = fetch,
 ): Promise<Response> {
+  let releaseUpload: (() => void) | undefined;
   try {
     if (!['GET', 'POST'].includes(request.method))
       return chatJson({ error: 'Method not allowed' }, 405);
@@ -420,37 +433,52 @@ export async function handleAccountChat(
     const binding = env.serviceAccountJson ? await providerDocument(store) : null;
     const personal = binding?.data.mode === 'personal';
     const path = new URL(request.url).pathname.replace(/\/$/, '');
-    const imageMatch = path.match(
-      /^\/api\/account\/inbox\/([a-f0-9]{32})\/messages\/(personal-[a-f0-9]{64})\/image$/,
+    const mediaMatch = path.match(
+      /^\/api\/account\/inbox\/([a-f0-9]{32})\/messages\/(personal-[a-f0-9]{64})\/(attachment|image)$/,
     );
-    if (request.method === 'GET' && imageMatch) {
-      if (!personal) throw new ChatError(404, 'Photo unavailable.');
-      const [, chatId, messageId] = imageMatch;
-      const saved = await store.read(`personalMessageImages/${messageId}`);
-      let image: PersonalImage | undefined;
-      if (saved) {
+    if (request.method === 'GET' && mediaMatch) {
+      if (!personal) throw new ChatError(404, 'Attachment unavailable.');
+      const [, chatId, messageId, variant] = mediaMatch;
+      const lookUp = async (path: string, slot: string) => {
+        const saved = await store.read(path);
+        if (!saved) return;
         try {
-          image = JSON.parse(
-            openPersonal(saved.data, uid, `image:${chatId}:${messageId}`, env.encryptionKey),
-          );
+          return JSON.parse(openPersonal(saved.data, uid, slot, env.encryptionKey));
         } catch {
-          // A photo saved to a different conversation must not be accessible here.
+          // Cross-chat or stale records must never be decrypted for a different conversation.
+        }
+      };
+      let media: PersonalMedia | undefined = await lookUp(
+        `personalMessageMedia/${messageId}`,
+        `media:${chatId}:${messageId}`,
+      );
+      if (!media)
+        media = oldPersonalImage(
+          await lookUp(`personalMessageImages/${messageId}`, `image:${chatId}:${messageId}`),
+        );
+      const load = (candidate?: PersonalMedia) =>
+        candidate && (variant === 'attachment' || candidate.kind === 'image')
+          ? personalMediaBytes(candidate, send, request.signal)
+          : undefined;
+      let result = await load(media);
+      if (!result) {
+        const history = await readPersonalHistory(store, chatId);
+        const historical = history.messages.find((m) => m.id === messageId);
+        const archived = historical?.personalMedia || oldPersonalImage(historical?.personalImage);
+        if (archived && JSON.stringify(archived) !== JSON.stringify(media)) {
+          result = await load(archived);
+          if (result) media = archived;
         }
       }
-      if (!image) {
-        const history = await readPersonalHistory(store, chatId);
-        image = history.messages.find(
-          (m) => m.id === messageId && m.type === 'image',
-        )?.personalImage;
-      }
-      const result = image && (await personalImageBytes(image, send, request.signal));
-      if (!result) throw new ChatError(404, 'Photo unavailable.');
+      if (!result) throw new ChatError(404, 'Attachment unavailable.');
       return new Response(new Uint8Array(result.bytes), {
         headers: {
           'Content-Type': result.mime,
           'Cache-Control': 'private, no-store',
           'X-Content-Type-Options': 'nosniff',
           'Cross-Origin-Resource-Policy': 'same-origin',
+          ...(media?.kind === 'document' ? { 'Content-Disposition': 'attachment' } : {}),
+          ...(result.preview ? { 'X-Media-Preview': 'true' } : {}),
         },
       });
     }
@@ -598,7 +626,9 @@ export async function handleAccountChat(
     }
     if (path === '/api/account/inbox/setup' && request.method === 'POST')
       return chatJson(configuration);
-    const match = path.match(/^\/api\/account\/inbox\/([a-f0-9]{32})(?:\/(send|read))?$/);
+    const match = path.match(
+      /^\/api\/account\/inbox\/([a-f0-9]{32})(?:\/(send|read|send-attachment))?$/,
+    );
     if (!match) throw new ChatError(404, 'Inbox route not found');
     const id = match[1];
     const [existing, customer] = await Promise.all([
@@ -647,18 +677,41 @@ export async function handleAccountChat(
         ? await readPersonalHistory(store, id)
         : { messages: [], clipped: false };
       const merged = new Map<string, ChatMessage>(
-        history.messages.map(({ personalId: _personalId, personalImage, ...m }) => [
-          m.id,
-          { ...m, ...(personalImage ? { imageAvailable: true } : {}) },
-        ]),
+        history.messages.map(({ personalId: _personalId, personalImage, personalMedia, ...m }) => {
+          const legacyPhoto = m.type === 'unsupported' && m.text === '[Image]';
+          const metadata =
+            attachmentFromRecord(m.attachment) ||
+            (m.type === 'image' || legacyPhoto
+              ? { kind: 'image' as const, available: false }
+              : undefined);
+          const attachment = metadata && {
+            ...metadata,
+            available: !!(personalMedia || personalImage),
+          };
+          return [
+            m.id,
+            {
+              ...m,
+              ...(legacyPhoto ? { type: 'image' as const, text: '' } : {}),
+              ...(attachment ? { attachment } : {}),
+              ...(m.type === 'image' && attachment?.available ? { imageAvailable: true } : {}),
+            },
+          ];
+        }),
       );
       for (const doc of listed.docs) {
         const m = messageFrom(doc.data, doc.name.split('/').pop()!);
         const old = merged.get(m.id);
+        const rich =
+          old?.attachment &&
+          (!m.attachment || (!m.attachment.available && old.attachment.available))
+            ? old
+            : m;
         merged.set(m.id, {
-          ...(old?.type === 'image' && m.type !== 'image'
-            ? { ...m, type: old.type, text: old.text }
-            : m),
+          ...m,
+          type: rich.type,
+          text: rich.text,
+          ...(rich.attachment ? { attachment: rich.attachment } : {}),
           ...(old?.imageAvailable || m.imageAvailable ? { imageAvailable: true } : {}),
           status: old ? nextChatStatus(old.status, m.status) : m.status,
         });
@@ -716,7 +769,15 @@ export async function handleAccountChat(
         ]);
       return chatJson({ success: true });
     }
-    if (match[2] !== 'send') throw new ChatError(404, 'Inbox route not found');
+    const sendingAttachment = match[2] === 'send-attachment';
+    if (!sendingAttachment && match[2] !== 'send')
+      throw new ChatError(404, 'Inbox route not found');
+    if (sendingAttachment && !personal)
+      throw new ChatError(
+        409,
+        'Attachments can only be sent from linked WhatsApp in this inbox.',
+        'ATTACHMENT_PROVIDER_UNSUPPORTED',
+      );
     if (!configuration.configured)
       throw new ChatError(503, configuration.reason!, 'INBOX_NOT_ACTIVATED');
     if (
@@ -729,19 +790,36 @@ export async function handleAccountChat(
         'A customer reply is required to open the 24-hour API reply window. Open WhatsApp or use an approved template outside that window.',
         'WHATSAPP_WINDOW_CLOSED',
       );
-    const parsed = sendInput.safeParse(
-      JSON.parse(new TextDecoder().decode(await readChatBody(request, 16384))),
-    );
+    if (sendingAttachment) releaseUpload = reserveAttachmentUpload();
+    const upload = sendingAttachment ? await parseAttachmentUpload(request) : undefined;
+    const parsed = upload
+      ? { success: true as const, data: { text: upload.caption, requestId: upload.requestId } }
+      : sendInput.safeParse(
+          JSON.parse(new TextDecoder().decode(await readChatBody(request, 16384))),
+        );
     if (!parsed.success)
       throw new ChatError(
         400,
         'Enter a message of up to 4,096 characters and a unique request ID.',
       );
     const { text, requestId } = parsed.data;
+    const attachment = upload
+      ? { kind: upload.kind, mime: upload.mime, name: upload.name, available: false }
+      : undefined;
+    const messageType = attachment
+      ? attachment.kind === 'image'
+        ? 'image'
+        : 'attachment'
+      : 'text';
+    const attachmentFingerprint = upload?.fingerprint;
     const requestPath = `sendRequests/${requestId}`;
     const previous = await store.read(requestPath);
     if (previous) {
-      if (previous.data.customerId !== id || previous.data.text !== text)
+      if (
+        previous.data.customerId !== id ||
+        previous.data.text !== text ||
+        (previous.data.attachmentFingerprint || undefined) !== attachmentFingerprint
+      )
         throw new ChatError(
           409,
           'This request ID belongs to a different message.',
@@ -763,7 +841,8 @@ export async function handleAccountChat(
     const provisional: ChatMessage = {
       id: provisionalId,
       direction: 'outbound',
-      type: 'text',
+      type: messageType,
+      ...(attachment ? { attachment } : {}),
       text,
       status: 'submitting',
       createdAt,
@@ -775,6 +854,7 @@ export async function handleAccountChat(
           ownerId: uid,
           customerId: id,
           text,
+          ...(attachmentFingerprint ? { attachmentFingerprint } : {}),
           state: 'submitting',
           messageId: provisionalId,
           createdAt,
@@ -798,6 +878,7 @@ export async function handleAccountChat(
           conversation.phone,
           text,
           `BPL${requestId.replaceAll('-', '').toUpperCase()}`,
+          upload,
         );
       } else {
         const version = env.graphVersion || 'v23.0';
@@ -884,7 +965,17 @@ export async function handleAccountChat(
       accepted = {
         id: messageId,
         direction: 'outbound',
-        type: 'text',
+        type: messageType,
+        ...(attachment
+          ? {
+              attachment: observed
+                ? messageFrom(observed.data, messageId).attachment || attachment
+                : attachment,
+            }
+          : {}),
+        ...(attachment?.kind === 'image' && observed?.data.imageAvailable === true
+          ? { imageAvailable: true }
+          : {}),
         text,
         status: observed ? nextChatStatus('accepted', observed.data.status) : 'accepted',
         metaId,
@@ -905,7 +996,10 @@ export async function handleAccountChat(
         ...(personal ? { provider: 'personal' } : { phoneNumberId: connection!.phoneNumberId }),
         ...(isLatest
           ? {
-              lastMessagePreview: text.slice(0, 240),
+              lastMessagePreview: (
+                text ||
+                (attachment ? (attachment.kind === 'image' ? 'Photo' : attachment.name) : '')
+              ).slice(0, 240),
               lastMessageAt: createdAt,
               lastMessageStatus: accepted.status,
             }
@@ -940,7 +1034,7 @@ export async function handleAccountChat(
         if (!(e instanceof ChatError && e.code === 'CONFLICT') || attempt === 3)
           throw new ChatError(
             503,
-            'Meta accepted the message, but its receipt could not be saved. Check the inbox before sending again.',
+            'WhatsApp accepted the message, but its receipt could not be saved. Check the inbox before sending again.',
             'SEND_INDETERMINATE',
           );
       }
@@ -959,5 +1053,7 @@ export async function handleAccountChat(
     if (error instanceof SyntaxError)
       return chatJson({ error: 'Enter valid message details.' }, 400);
     return chatJson({ error: 'The inbox could not complete this request. Please try again.' }, 503);
+  } finally {
+    releaseUpload?.();
   }
 }
