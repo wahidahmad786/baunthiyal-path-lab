@@ -1,3 +1,4 @@
+import { openPersonal, sealPersonal } from './personal-auth';
 import {
   ChatError,
   ChatStore,
@@ -29,17 +30,22 @@ export async function recordPersonalMessage(
   const id = (await chatHash(event.phone)).slice(0, 32);
   const messageId = await personalMessageId(event.phone, event.providerId);
   for (let attempt = 0; attempt < 5; attempt++) {
-    const [message, conversation, customer, receipt] = await Promise.all([
+    const [message, conversation, customer, receipt, contact] = await Promise.all([
       store.read(`conversations/${id}/messages/${messageId}`),
       store.read(`conversations/${id}`),
       store.read(`customers/${id}`),
       store.read(`personalReceipts/${messageId}`),
+      store.read(`personalContacts/${id}`),
     ]);
     const current = conversationFrom(
       conversation?.data || {
         phone: event.phone,
         customerId: id,
-        customerName: customer?.data.name || event.name || event.phone,
+        customerName:
+          customer?.data.name ||
+          contact?.data.name ||
+          (!event.outbound ? event.name : '') ||
+          event.phone,
       },
       id,
     );
@@ -126,6 +132,9 @@ export async function recordPersonalMessage(
         ),
       );
     }
+    writes.push(
+      store.write('inboxStatus/personalRevision', { at: new Date().toISOString() }, undefined),
+    );
     try {
       await store.commit(writes);
       return messageId;
@@ -146,6 +155,63 @@ export async function recordPersonalReceipt(
   for (let attempt = 0; attempt < 4; attempt++) {
     const message = await store.read(`conversations/${id}/messages/${messageId}`);
     if (!message) {
+      const archive = await store.read(`personalHistory/${id}`);
+      if (archive) {
+        const history = JSON.parse(
+          openPersonal(archive.data, store.uid, `history:${id}`, store.env.encryptionKey),
+        ) as { id: string; direction: string; status: ChatMessageStatus; createdAt: string }[];
+        const historical = history.find((m) => m.id === messageId && m.direction === 'outbound');
+        if (historical) {
+          const next = nextChatStatus(historical.status, status);
+          if (next === historical.status) return;
+          historical.status = next;
+          const conversation = await store.read(`conversations/${id}`);
+          const writes = [
+            store.write(
+              `personalHistory/${id}`,
+              {
+                ...archive.data,
+                ...sealPersonal(
+                  JSON.stringify(history),
+                  store.uid,
+                  `history:${id}`,
+                  store.env.encryptionKey,
+                ),
+                updatedAt: new Date().toISOString(),
+              },
+              archive,
+            ),
+            store.write(
+              `conversations/${id}`,
+              {
+                historyUpdatedAt: new Date().toISOString(),
+                ...(conversation?.data.lastMessageAt === historical.createdAt
+                  ? { lastMessageStatus: next }
+                  : {}),
+              },
+              conversation,
+              [
+                'historyUpdatedAt',
+                ...(conversation?.data.lastMessageAt === historical.createdAt
+                  ? ['lastMessageStatus']
+                  : []),
+              ],
+            ),
+            store.write(
+              'inboxStatus/personalRevision',
+              { at: new Date().toISOString() },
+              undefined,
+            ),
+          ];
+          try {
+            await store.commit(writes);
+            return;
+          } catch (e) {
+            if (!(e instanceof ChatError && e.status === 409) || attempt === 3) throw e;
+            continue;
+          }
+        }
+      }
       const previous = await store.read(`personalReceipts/${messageId}`);
       try {
         await store.commit([
@@ -179,6 +245,9 @@ export async function recordPersonalReceipt(
           'lastMessageStatus',
         ]),
       );
+    writes.push(
+      store.write('inboxStatus/personalRevision', { at: new Date().toISOString() }, undefined),
+    );
     try {
       await store.commit(writes);
       return;

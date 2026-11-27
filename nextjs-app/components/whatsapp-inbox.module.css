@@ -789,3 +789,105 @@
   align-self: flex-start;
   text-decoration: none;
 }
+.syncBar {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+  background: #f1f8f6;
+  border: 1px solid #dceae5;
+  border-radius: 10px;
+  padding: 15px 18px;
+  margin: 0 0 18px;
+  color: #41685c;
+}
+.syncBar strong {
+  font-size: 13px;
+}
+.syncBar p {
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 5px 0 0;
+  max-width: 700px;
+}
+.syncBar progress {
+  display: block;
+  width: min(300px, 100%);
+  height: 6px;
+  margin-top: 9px;
+  accent-color: #087f78;
+}
+.syncActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.newChat {
+  margin-left: auto;
+  color: #087f78;
+  flex-shrink: 0;
+}
+.loadEarlier {
+  display: flex;
+  margin: 0 auto 16px;
+}
+.historyNote {
+  text-align: center;
+  font-size: 11px;
+  color: #6d8177;
+  margin-bottom: 14px;
+}
+@media (max-width: 760px) {
+  .syncBar {
+    padding: 13px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .syncActions {
+    width: 100%;
+  }
+  .syncBar p {
+    font-size: 12px;
+  }
+  .shell {
+    min-height: 520px;
+    height: calc(100dvh - 140px);
+    scroll-margin-top: 16px;
+  }
+  .contactName strong {
+    font-size: 14px;
+  }
+  .contactPreview {
+    font-size: 12px;
+  }
+  .bubble > p {
+    font-size: 14px;
+  }
+  .composer textarea {
+    font-size: 16px;
+    min-height: 54px;
+  }
+  .chatHeader h3 {
+    font-size: 14px;
+  }
+  .chatTitle p {
+    font-size: 12px;
+  }
+  .threadHeading h3 {
+    font-size: 16px;
+  }
+  .search input {
+    font-size: 16px;
+  }
+  .heading p {
+    font-size: 12px;
+  }
+  .openApp {
+    font-size: 11px;
+  }
+  .threadFooter {
+    font-size: 11px;
+  }
+}

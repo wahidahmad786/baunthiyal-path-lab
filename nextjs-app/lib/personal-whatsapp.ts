@@ -1,3 +1,10 @@
+import {
+  historyStatusPath,
+  ingestPersonalHistory,
+  personalHistoryStatus,
+  savePersonalContact,
+  historyContactPhone,
+} from './personal-history';
 import { randomUUID } from 'node:crypto';
 import pino from 'pino';
 import QRCode from 'qrcode';
@@ -34,7 +41,9 @@ type Session = {
   creds: any;
   queue: Promise<void>;
   authQueue: Promise<void>;
+  historyQueue: Promise<void>;
   linkedSince: number;
+  wasRegistered: boolean;
   renewing?: boolean;
   heartbeat?: NodeJS.Timeout;
   expiry?: NodeJS.Timeout;
@@ -101,6 +110,33 @@ function enqueueAuth(session: Session, fn: () => Promise<void>) {
     };
     stop(session);
   });
+}
+function enqueueHistory(session: Session, fn: () => Promise<void>) {
+  session.historyQueue = session.historyQueue
+    .then(async () => {
+      if (!session.stopped) await fn();
+    })
+    .catch(async () => {
+      if (session.stopped) return;
+      try {
+        await assertLease(session);
+        await session.store.commit([
+          session.store.write(
+            historyStatusPath,
+            {
+              phase: 'error',
+              message:
+                'Some phone history could not be saved. Your live chat connection remains available; retry Sync chats.',
+              updatedAt: now(),
+            },
+            undefined,
+            ['phase', 'message', 'updatedAt'],
+          ),
+        ]);
+      } catch {
+        /* The current socket will report any separate connection/storage failure. */
+      }
+    });
 }
 async function assertLease(session: Session) {
   const lease = await session.store.read(leasePath);
@@ -184,11 +220,12 @@ async function connectSocket(session: Session) {
       },
     },
     logger,
-    browser: b.Browsers.ubuntu('Chrome'),
+    browser: b.Browsers.ubuntu('Desktop'),
     ...(process.env.HTTPS_PROXY ? { agent: new HttpsProxyAgent(process.env.HTTPS_PROXY) } : {}),
     markOnlineOnConnect: false,
-    syncFullHistory: false,
-    shouldSyncHistoryMessage: () => false,
+    syncFullHistory: true,
+    shouldSyncHistoryMessage: (notification) =>
+      !notification.fileLength || Number(notification.fileLength) <= 8 * 1024 * 1024,
     getMessage: async () => undefined,
     connectTimeoutMs: 30000,
     defaultQueryTimeoutMs: 20000,
@@ -264,6 +301,14 @@ async function connectSocket(session: Session) {
         session.retry.unref();
       }
       await persistStatus(session);
+      if (update.connection === 'open' && session.wasRegistered) {
+        const saved = await session.store.read(historyStatusPath);
+        if (
+          !saved?.data.lastSyncedAt &&
+          (!saved?.data.requestedAt || Date.parse(saved.data.requestedAt) < Date.now() - 600000)
+        )
+          void requestPersonalHistory(session.store).catch(() => {});
+      }
     });
   });
   async function phoneFor(key: { remoteJid?: string | null; remoteJidAlt?: string | null }) {
@@ -273,10 +318,137 @@ async function connectSocket(session: Session) {
       return personalPhone(await socket.signalRepository.lidMapping.getPNForLID(key.remoteJid));
     return null;
   }
+  socket.ev.on('messaging-history.set', (batch) =>
+    enqueueHistory(session, async () => {
+      await assertLease(session);
+      await session.store.commit([
+        session.store.write(
+          historyStatusPath,
+          {
+            phase: 'syncing',
+            message: 'Receiving available chats from your phone…',
+            progress:
+              typeof batch.progress === 'number'
+                ? Math.max(0, Math.min(100, batch.progress))
+                : null,
+            updatedAt: now(),
+          },
+          undefined,
+          ['phase', 'message', 'progress', 'updatedAt'],
+        ),
+      ]);
+      const counts = await ingestPersonalHistory(
+        session.store,
+        batch,
+        phoneFor,
+        b.normalizeMessageContent,
+        async (counts) => {
+          if (session.stopped) throw new Error('Session closed');
+          await assertLease(session);
+          await session.store.commit([
+            session.store.write(historyStatusPath, { ...counts, updatedAt: now() }, undefined, [
+              'chats',
+              'messages',
+              'updatedAt',
+            ]),
+          ]);
+        },
+      );
+      await session.store.commit([
+        session.store.write(
+          historyStatusPath,
+          {
+            phase: batch.progress === 100 ? 'ready' : 'syncing',
+            message:
+              batch.progress === 100
+                ? 'Available phone chat history received.'
+                : 'Phone chat history is arriving. You can open received chats now.',
+            progress:
+              typeof batch.progress === 'number'
+                ? Math.max(0, Math.min(100, batch.progress))
+                : null,
+            ...counts,
+            lastSyncedAt: now(),
+            updatedAt: now(),
+          },
+          undefined,
+          ['phase', 'message', 'progress', 'chats', 'messages', 'lastSyncedAt', 'updatedAt'],
+        ),
+      ]);
+    }),
+  );
+  socket.ev.on('messaging-history.status', (event) => {
+    if (event.status !== 'complete' || !event.explicit || event.syncType === 0) return;
+    enqueueHistory(session, async () => {
+      await assertLease(session);
+      const previous = await session.store.read(historyStatusPath);
+      if (!previous?.data.lastSyncedAt) return;
+      await session.store.commit([
+        session.store.write(
+          historyStatusPath,
+          {
+            phase: 'ready',
+            progress: 100,
+            message: 'Available phone chat history received.',
+            updatedAt: now(),
+          },
+          undefined,
+          ['phase', 'progress', 'message', 'updatedAt'],
+        ),
+      ]);
+    });
+  });
+  const updateContacts = (
+    contacts: {
+      id?: string;
+      phoneNumber?: string;
+      name?: string;
+      notify?: string;
+      verifiedName?: string;
+    }[],
+  ) =>
+    enqueueHistory(session, async () => {
+      await assertLease(session);
+      for (const contact of contacts.slice(0, 2000)) {
+        const phone =
+          historyContactPhone(contact) ||
+          (await phoneFor({ remoteJid: contact.id, remoteJidAlt: contact.phoneNumber }));
+        const name = contact.name || contact.notify || contact.verifiedName;
+        if (phone && name) await savePersonalContact(session.store, phone, name);
+      }
+    });
+  socket.ev.on('contacts.upsert', updateContacts);
+  socket.ev.on('contacts.update', updateContacts);
   socket.ev.on('messages.upsert', (event) => {
     enqueue(session, async () => {
       await assertLease(session);
       for (const message of event.messages) {
+        const ownPhone = personalPhone(session.creds.me?.id);
+        const fromOwnPhone =
+          message.key.fromMe === true || (!!ownPhone && (await phoneFor(message.key)) === ownPhone);
+        const response = fromOwnPhone
+          ? message.message?.protocolMessage?.peerDataOperationRequestResponseMessage
+          : undefined;
+        for (const result of response?.peerDataOperationResult || []) {
+          const info = result.fullHistorySyncOnDemandRequestResponse;
+          if (!info || !info.requestMetadata?.requestId) continue;
+          const pending = await session.store.read(historyStatusPath);
+          if (pending?.data.requestId !== info.requestMetadata.requestId) continue;
+          if (info.responseCode !== 0)
+            await session.store.commit([
+              session.store.write(
+                historyStatusPath,
+                {
+                  phase: 'needs_relink',
+                  message:
+                    'Your phone could not share history through this request. Re-link this device to import available chats.',
+                  updatedAt: now(),
+                },
+                undefined,
+                ['phase', 'message', 'updatedAt'],
+              ),
+            ]);
+        }
         const phone = await phoneFor(message.key);
         if (!phone || !message.key.id || !message.message) continue;
         const content = b.normalizeMessageContent(message.message);
@@ -358,7 +530,26 @@ export async function startPersonal(
 ) {
   if (runtime.closing) throw new ChatError(503, 'Server is restarting. Try again shortly.');
   const current = runtime.sessions.get(store.uid);
-  if (current) return current;
+  if (current && options.relink) {
+    current.state = {
+      status: 'connecting',
+      phone: current.state.phone,
+      qr: null,
+      pairingCode: null,
+      message: 'Re-linking this device for available phone history…',
+    };
+    current.stopped = true;
+    clearInterval(current.heartbeat);
+    clearTimeout(current.expiry);
+    clearTimeout(current.retry);
+    try {
+      await current.socket?.logout();
+    } catch {
+      /* Closed connections can still be re-linked by their owner. */
+    }
+    await closeSession(current);
+    await current.authQueue;
+  } else if (current) return current;
   const pending = runtime.starts.get(store.uid);
   if (pending) return pending;
   const starting = (async () => {
@@ -400,9 +591,11 @@ export async function startPersonal(
       auth,
       creds,
       registered: !!creds.registered,
+      wasRegistered: !!creds.registered,
       stopped: false,
       queue: Promise.resolve(),
       authQueue: Promise.resolve(),
+      historyQueue: Promise.resolve(),
       linkedSince: Date.parse(binding.data.connectedAt || now()),
       failures: 0,
       leaseId,
@@ -421,6 +614,21 @@ export async function startPersonal(
     runtime.sessions.set(store.uid, session);
     try {
       await auth.write({ creds });
+      if (options.relink)
+        await store.commit([
+          store.write(
+            historyStatusPath,
+            {
+              phase: 'waiting',
+              message: 'Approve the new linked device and keep your phone online while chats sync.',
+              progress: null,
+              chats: 0,
+              messages: 0,
+              updatedAt: now(),
+            },
+            undefined,
+          ),
+        ]);
       session.heartbeat = setInterval(() => {
         if (session.renewing || session.stopped) return;
         session.renewing = true;
@@ -526,7 +734,7 @@ export async function sendPersonal(
   providerId: string,
 ) {
   const session = runtime.sessions.get(store.uid);
-  if (!session?.socket || session.state.status !== 'connected')
+  if (!session?.socket || session.stopped || session.state.status !== 'connected')
     throw new ChatError(
       409,
       'Your linked WhatsApp is offline. Open WhatsApp Integration and reconnect.',
@@ -590,4 +798,66 @@ if (!(globalThis as any).bplPersonalShutdownInstalled) {
   };
   process.once('SIGTERM', shutdown);
   process.once('SIGINT', shutdown);
+}
+
+export async function requestPersonalHistory(store: ChatStore) {
+  const session = runtime.sessions.get(store.uid);
+  if (!session?.socket || session.stopped || session.state.status !== 'connected')
+    throw new ChatError(409, 'Connect your linked WhatsApp before syncing chats.');
+  await assertLease(session);
+  const previous = await store.read(historyStatusPath);
+  if (previous?.data.requestedAt && Date.parse(previous.data.requestedAt) > Date.now() - 60000)
+    throw new ChatError(
+      429,
+      'A chat sync was requested recently. Keep your phone online and wait a minute.',
+    );
+  const requestId = randomUUID();
+  await store.commit([
+    store.write(
+      historyStatusPath,
+      {
+        phase: 'requested',
+        requestId,
+        requestedAt: now(),
+        updatedAt: now(),
+        progress: null,
+        chats: previous?.data.chats || 0,
+        messages: previous?.data.messages || 0,
+        message: 'Chat history requested from your phone. Keep WhatsApp open and connected.',
+      },
+      previous,
+    ),
+  ]);
+  const b = await import('@whiskeysockets/baileys');
+  try {
+    await session.socket.sendPeerDataOperationMessage({
+      peerDataOperationRequestType:
+        b.proto.Message.PeerDataOperationRequestType.FULL_HISTORY_SYNC_ON_DEMAND,
+      fullHistorySyncOnDemandRequest: {
+        requestMetadata: { requestId },
+        historySyncConfig: {
+          fullSyncDaysLimit: 90,
+          fullSyncSizeMbLimit: 64,
+          recentSyncDaysLimit: 30,
+          storageQuotaMb: 64,
+        },
+      },
+    });
+  } catch {
+    await store.commit([
+      store.write(
+        historyStatusPath,
+        {
+          phase: 'error',
+          message:
+            'WhatsApp did not confirm the history request. Retry when your linked device is online.',
+          updatedAt: now(),
+        },
+        undefined,
+        ['phase', 'message', 'updatedAt'],
+      ),
+    ]);
+    throw new ChatError(503, 'The phone history request was not confirmed. Please retry.');
+  }
+  return personalHistoryStatus(store);
 }

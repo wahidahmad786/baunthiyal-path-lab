@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { MessageCircle, QrCode, ShieldCheck, RefreshCw, Smartphone } from 'lucide-react';
 import { labClientAuth } from '@/lib/client-auth';
 import WhatsAppIntegration from './whatsapp-integration';
@@ -15,9 +15,11 @@ type Connection = {
 export default function WhatsAppConnectionOptions({
   onConnectionChange,
   onProviderChange,
+  onOpenInbox,
 }: {
   onConnectionChange?: (connected: boolean) => void;
   onProviderChange?: (mode: 'meta' | 'personal' | null) => void;
+  onOpenInbox?: () => void;
 }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [error, setError] = useState(''),
@@ -25,6 +27,7 @@ export default function WhatsAppConnectionOptions({
   const [accepted, setAccepted] = useState(false),
     [phone, setPhone] = useState(''),
     [pairing, setPairing] = useState(false);
+  const justLinked = useRef(false);
   const [choice, setChoice] = useState<'personal' | null>(null);
   const request = useCallback(
     async (data?: unknown) => {
@@ -67,7 +70,14 @@ export default function WhatsAppConnectionOptions({
     );
     return () => clearInterval(interval);
   }, [request, connection?.mode, connection?.personal?.status]);
+  useEffect(() => {
+    if (justLinked.current && connection?.personal?.status === 'connected') {
+      justLinked.current = false;
+      onOpenInbox?.();
+    }
+  }, [connection?.personal?.status, onOpenInbox]);
   async function action(data: unknown) {
+    if ((data as any)?.action === 'connect-personal') justLinked.current = true;
     setBusy(true);
     setError('');
     try {
@@ -315,9 +325,39 @@ export default function WhatsAppConnectionOptions({
             </button>
           )}
           {personal?.status === 'connected' && (
-            <p className="wa-linked-success">
-              Connected. Open WhatsApp Inbox to send and receive individual messages.
-            </p>
+            <div className="wa-connected-actions">
+              <p className="wa-linked-success">
+                Connected. Open your WhatsApp panel to view synced chats and send messages.
+              </p>
+              {onOpenInbox && (
+                <button className="button primary" onClick={onOpenInbox}>
+                  <MessageCircle size={17} />
+                  Open WhatsApp Inbox
+                </button>
+              )}
+              <details>
+                <summary>Chat history did not arrive?</summary>
+                <p>
+                  First use Sync chats in the inbox while your phone is online. If WhatsApp cannot
+                  resend history, re-link this device and scan again to receive available phone
+                  chats. Your connected number and saved portal conversations stay with this
+                  account.
+                </p>
+                <button
+                  className="button secondary"
+                  disabled={busy}
+                  onClick={() =>
+                    void action({
+                      action: 'connect-personal',
+                      acceptedUnofficial: true,
+                      relink: true,
+                    })
+                  }
+                >
+                  Re-link this device for chat history
+                </button>
+              </details>
+            </div>
           )}
           <p className="wa-hosting-note">
             Linked messages need a running server. Free hosting can sleep when idle; the portal

@@ -4,6 +4,10 @@ import WhatsAppConnectionOptions from '../components/whatsapp-connection-options
 import '../app/globals.css';
 createRoot(document.getElementById('root')!).render(
   <main style={{ padding: 20, maxWidth: 1200, margin: 'auto' }}>
-    <WhatsAppConnectionOptions />
+    <WhatsAppConnectionOptions
+      onOpenInbox={() => {
+        document.body.dataset.inbox = 'open';
+      }}
+    />
   </main>,
 );

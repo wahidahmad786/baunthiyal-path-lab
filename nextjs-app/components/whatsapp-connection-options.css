@@ -191,3 +191,50 @@
   border-radius: 16px;
   box-shadow: 0 3px 16px #174f5d04;
 }
+.wa-connected-actions {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+}
+.wa-connected-actions details {
+  border-top: 1px solid #e3ece9;
+  padding-top: 18px;
+}
+.wa-connected-actions summary {
+  cursor: pointer;
+  color: #526e76;
+  font-size: 13px;
+}
+.wa-phone-contacts {
+  max-height: 230px;
+  overflow-y: auto;
+  border: 1px solid #e1eae7;
+  border-radius: 10px;
+  margin-top: 8px;
+}
+.wa-phone-contacts > button {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 13px 15px;
+  background: white;
+  border-bottom: 1px solid #edf2ef;
+  text-align: left;
+  color: #365954;
+}
+.wa-phone-contacts > button:hover {
+  background: #eef8f4;
+}
+.wa-phone-contacts small {
+  color: #769187;
+}
+.wa-phone-contacts > p {
+  padding: 15px;
+  color: #6f8984;
+  font-size: 13px;
+}
+
+.wa-new-chat-form input {
+  font-size: 16px;
+}

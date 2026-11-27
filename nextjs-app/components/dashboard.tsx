@@ -1303,6 +1303,7 @@ export default function Dashboard() {
               key={previewIdentity.uid}
               onConnectionChange={setWhatsappVerified}
               onProviderChange={setWhatsappProvider}
+              onOpenInbox={() => navigate('inbox')}
             />
           )}
           {section === 'templates' && previewIdentity && whatsappProvider !== 'personal' && (

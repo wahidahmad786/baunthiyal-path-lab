@@ -364,6 +364,7 @@ export async function handleTeam(
             },
             existing,
           ),
+          store.write('inboxStatus/personalRevision', { at: timestamp() }, undefined),
         ]);
         return chatJson({ meta: input });
       }

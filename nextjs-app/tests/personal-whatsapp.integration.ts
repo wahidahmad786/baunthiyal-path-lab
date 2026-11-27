@@ -1,3 +1,10 @@
+import {
+  ingestPersonalHistory,
+  savePersonalHistoryChat,
+  readPersonalHistory,
+  personalMessageFrom,
+  historyStatusPath,
+} from '../lib/personal-history';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
@@ -305,4 +312,267 @@ test('linked inbox sends once without a Meta reply window; early delivery receip
     await handleConnectionHealth(req('account/connection-health'), env, transport)
   ).json();
   assert.equal(health.state, 'healthy');
+});
+
+test('real-shaped phone history loads chats and encrypted messages without registering contacts or changing marketing consent', async () => {
+  const b = await import('@whiskeysockets/baileys');
+  const number = '919876543218',
+    contactId = (await chatHash(number)).slice(0, 32),
+    baseSeconds = Math.floor(Date.now() / 1000) - 100000;
+  const records = Array.from({ length: 130 }, (_, i) => ({
+    key: { id: 'history-' + i, remoteJid: `${number}@s.whatsapp.net`, fromMe: i % 2 === 0 },
+    messageTimestamp: baseSeconds + i,
+    message: { conversation: i === 1 ? 'STOP' : 'Phone history ' + i },
+    ...(i % 2 === 0 ? { status: 3 } : {}),
+  }));
+  const batch = {
+    contacts: [{ id: `${number}@s.whatsapp.net`, name: 'Phone contact name' }],
+    chats: [{ id: `${number}@s.whatsapp.net`, unreadCount: 4 }],
+    messages: records,
+  };
+  const resolve = async (k: any) =>
+    k.remoteJid?.endsWith('@s.whatsapp.net') ? k.remoteJid.split('@')[0] : null;
+  const imported = await ingestPersonalHistory(
+    store,
+    batch as any,
+    resolve,
+    b.normalizeMessageContent,
+  );
+  assert.equal(imported.chats, 1);
+  assert.equal(imported.messages, 130);
+  await ingestPersonalHistory(store, batch as any, resolve, b.normalizeMessageContent);
+  assert.equal((await root().collection('customers').doc(contactId).get()).exists, false);
+  assert.equal(
+    (await root().collection('conversations').doc(contactId).get()).data()?.unreadCount,
+    4,
+  );
+  assert.equal(
+    (await root().collection('conversations').doc(contactId).get()).data()?.customerName,
+    'Phone contact name',
+  );
+  const raw = (await root().collection('personalHistory').doc(contactId).get()).data();
+  assert.ok(!JSON.stringify(raw).includes('Phone history'));
+  const result = await (
+    await handleAccountChat(req(`account/inbox/${contactId}`), env, transport)
+  ).json();
+  assert.equal(result.messages.length, 100);
+  assert.ok(result.nextBefore);
+  assert.equal(result.messages.at(-1).text, 'Phone history 129');
+  const prior = await (
+    await handleAccountChat(
+      req(`account/inbox/${contactId}?before=${encodeURIComponent(result.nextBefore)}`),
+      env,
+      transport,
+    )
+  ).json();
+  assert.equal(prior.messages.length, 30);
+  assert.equal(prior.nextBefore, null);
+  assert.ok(!result.messages.some((m: any) => prior.messages.some((x: any) => x.id === m.id)));
+  const cached = await (
+    await handleAccountChat(
+      req(`account/inbox/${contactId}?revision=${encodeURIComponent(result.revision)}`),
+      env,
+      transport,
+    )
+  ).json();
+  assert.equal(cached.unchanged, true);
+  assert.ok(!cached.messages);
+  const first = await (await handleAccountChat(req('account/inbox'), env, transport)).json();
+  const cachedInbox = await (
+    await handleAccountChat(
+      req(`account/inbox?revision=${encodeURIComponent(first.revision)}`),
+      env,
+      transport,
+    )
+  ).json();
+  assert.equal(cachedInbox.unchanged, true);
+  assert.ok(!cachedInbox.conversations);
+  const privateRead = await fetch(
+    `${env.firestoreOrigin}/v1/projects/demo-bpl/databases/(default)/documents/${store.root}/personalHistory/${contactId}`,
+    { headers: { Authorization: `Bearer ${tokens[owner]}` } },
+  );
+  assert.equal(privateRead.status, 403);
+  const otherStore = await ChatStore.open(env, other, transport, tokens[other], true);
+  assert.deepEqual(await readPersonalHistory(otherStore, contactId), {
+    messages: [],
+    clipped: false,
+  });
+  const beforeEvents = (await root().collection('consentEvents').get()).size;
+  assert.equal((await root().collection('consentEvents').get()).size, beforeEvents);
+  await recordPersonalReceipt(store, number, 'history-128', 'read');
+  const read = await (
+    await handleAccountChat(req(`account/inbox/${contactId}`), env, transport)
+  ).json();
+  assert.equal(read.messages.find((m: any) => m.text === 'Phone history 128').status, 'read');
+});
+test('new personal chats do not auto-send or opt customers in, and phone sync requests are real protocol requests rather than fabricated completion', async () => {
+  const before = sends,
+    number = '919876543219';
+  const started = await handleAccountChat(
+    req('account/inbox/start', { phone: '+' + number, name: 'New phone recipient' }),
+    env,
+    transport,
+  );
+  assert.equal(started.status, 201);
+  const { conversation } = await started.json();
+  assert.equal(sends, before);
+  assert.equal((await root().collection('customers').doc(conversation.id).get()).exists, false);
+  assert.equal(
+    (await handleAccountChat(req('account/inbox/start', { phone: 'not a phone' }), env, transport))
+      .status,
+    400,
+  );
+  assert.equal(
+    (
+      await handleAccountChat(
+        req(`account/inbox/${conversation.id}`, undefined, other),
+        env,
+        transport,
+      )
+    ).status,
+    404,
+  );
+  const session = (globalThis as any).bplPersonalRuntime.sessions.get(owner);
+  let requests = 0;
+  session.socket.sendPeerDataOperationMessage = async (payload: any) => {
+    requests++;
+    assert.equal(payload.peerDataOperationRequestType, 6);
+    assert.ok(payload.fullHistorySyncOnDemandRequest.requestMetadata.requestId);
+    return 'actual-fixture-request-id';
+  };
+  const response = await handleAccountChat(req('account/inbox/sync', {}), env, transport);
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.history.phase, 'requested');
+  assert.notEqual(result.history.progress, 100);
+  assert.equal(requests, 1);
+  assert.equal(
+    (await handleAccountChat(req('account/inbox/sync', {}), env, transport)).status,
+    429,
+  );
+  assert.equal(requests, 1);
+  const changed = await (await handleAccountChat(req('account/inbox'), env, transport)).json();
+  assert.ok(changed.conversations.some((c: any) => c.id === conversation.id));
+});
+
+test('live personal messages paginate across timestamp ties and shared inbox roles cannot request owner history or send as a viewer', async () => {
+  const number = '919876543221';
+  const open = await (
+    await handleAccountChat(req('account/inbox/start', { phone: '+' + number }), env, transport)
+  ).json();
+  const cid = open.conversation.id;
+  const timestamp = new Date(Date.now() - 3600000).toISOString(),
+    batch = db().batch();
+  for (let i = 0; i < 130; i++) {
+    const mid = 'personal-' + i.toString(16).padStart(64, '0');
+    batch.set(root().collection('conversations').doc(cid).collection('messages').doc(mid), {
+      id: mid,
+      direction: 'inbound',
+      type: 'text',
+      text: 'Live ' + i,
+      status: 'received',
+      createdAt: new Date(timestamp),
+    });
+  }
+  await batch.commit();
+  const page1 = await (await handleAccountChat(req(`account/inbox/${cid}`), env, transport)).json();
+  assert.equal(page1.messages.length, 100);
+  const page2Response = await handleAccountChat(
+    req(`account/inbox/${cid}?before=${encodeURIComponent(page1.nextBefore)}`),
+    env,
+    transport,
+  );
+  assert.equal(page2Response.status, 200);
+  const page2 = await page2Response.json();
+  assert.equal(page2.messages.length, 30);
+  assert.equal(new Set([...page1.messages, ...page2.messages].map((m: any) => m.id)).size, 130);
+  await root()
+    .collection('teamMembers')
+    .doc(other)
+    .set({ email: other + '@example.test', role: 'viewer', active: true });
+  assert.equal(
+    (
+      await handleAccountChat(
+        req(`account/inbox/${cid}?workspace=${owner}`, undefined, other),
+        env,
+        transport,
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await handleAccountChat(
+        req(`account/inbox/start?workspace=${owner}`, { phone: '+919876543222' }, other),
+        env,
+        transport,
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await handleAccountChat(
+        req(`account/inbox/sync?workspace=${owner}`, {}, other),
+        env,
+        transport,
+      )
+    ).status,
+    403,
+  );
+  await root().collection('teamMembers').doc(other).update({ role: 'staff' });
+  assert.equal(
+    (
+      await handleAccountChat(
+        req(`account/inbox/sync?workspace=${owner}`, {}, other),
+        env,
+        transport,
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await handleAccountChat(
+        req(`account/inbox/start?workspace=${owner}`, { phone: '+919876543222' }, other),
+        env,
+        transport,
+      )
+    ).status,
+    201,
+  );
+  await root().collection('teamMembers').doc(other).update({ active: false });
+  assert.equal(
+    (
+      await handleAccountChat(
+        req(`account/inbox/${cid}?workspace=${owner}`, undefined, other),
+        env,
+        transport,
+      )
+    ).status,
+    403,
+  );
+});
+
+test('long phone histories stay within private snapshot limits and report clipping rather than claiming a full archive', async () => {
+  const number = '919876543223',
+    cid = (await chatHash(number)).slice(0, 32),
+    messages = [];
+  for (let i = 0; i < 510; i++)
+    messages.push({
+      id: 'personal-' + i.toString(16).padStart(64, '0'),
+      personalId: 'long-' + i,
+      source: 'phone_history' as const,
+      direction: 'inbound' as const,
+      type: 'text' as const,
+      status: 'received' as const,
+      text: 'X'.repeat(4096),
+      createdAt: new Date(Date.now() - 1000000 + i * 1000).toISOString(),
+    });
+  await savePersonalHistoryChat(store, number, 'Long history', messages);
+  const saved = await readPersonalHistory(store, cid);
+  assert.equal(saved.clipped, true);
+  assert.ok(saved.messages.length < 500);
+  assert.ok(Buffer.byteLength(JSON.stringify(saved.messages)) <= 520000);
+  assert.equal(saved.messages.at(-1)?.personalId, 'long-509');
 });

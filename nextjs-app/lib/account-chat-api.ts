@@ -1,7 +1,9 @@
+import { readPersonalHistory, personalHistoryStatus } from './personal-history';
 import { providerDocument } from './whatsapp-provider';
-import { personalStatus, sendPersonal } from './personal-whatsapp';
+import { personalStatus, sendPersonal, requestPersonalHistory } from './personal-whatsapp';
 import { personalMessageId } from './personal-events';
 import { z } from 'zod';
+import { normalizePhone } from './domain';
 import { allowedRequestOrigin } from './request-origin';
 import { metaTestSender, replyBlockFor } from './chat-reply-state';
 import { metaReplyError } from './meta-reply-error';
@@ -176,6 +178,41 @@ export class ChatStore {
       truncated: !!data.nextPageToken,
     };
   }
+  async messagesBefore(path: string, cursor: { at: string; id: string } | null, limit: number) {
+    if (!cursor) return this.list(path, 'createdAt desc', limit);
+    const slash = path.lastIndexOf('/'),
+      parent = path.slice(0, slash),
+      collection = path.slice(slash + 1);
+    const response = await this.send(`${this.base}/${this.root}/${parent}:runQuery`, {
+      method: 'POST',
+      headers: { Authorization: this.authorization, 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(15000),
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: collection }],
+          orderBy: [
+            { field: { fieldPath: 'createdAt' }, direction: 'DESCENDING' },
+            { field: { fieldPath: '__name__' }, direction: 'DESCENDING' },
+          ],
+          startAt: {
+            values: [
+              { timestampValue: cursor.at },
+              {
+                referenceValue: `projects/${this.env.projectId}/databases/(default)/documents/${this.root}/${path}/${cursor.id}`,
+              },
+            ],
+            before: false,
+          },
+          limit,
+        },
+      }),
+    });
+    if (!response.ok) throw new ChatError(503, 'Earlier messages could not be loaded.');
+    const docs = (await response.json())
+      .filter((r: any) => r.document)
+      .map((r: any) => this.decode(r.document)) as ChatDocument[];
+    return { docs, truncated: docs.length === limit };
+  }
   write(
     path: string,
     data: Record<string, unknown>,
@@ -238,8 +275,8 @@ export function conversationFrom(record: Record<string, any>, id: string): ChatC
     phone: String(record.phone || ''),
     customerName: String(record.customerName || record.name || 'WhatsApp customer'),
     lastMessagePreview: String(record.lastMessagePreview || ''),
-    lastMessageAt: record.lastMessageAt || null,
-    lastInboundAt: record.lastInboundAt || null,
+    lastMessageAt: record.lastMessageAt ? new Date(record.lastMessageAt).toISOString() : null,
+    lastInboundAt: record.lastInboundAt ? new Date(record.lastInboundAt).toISOString() : null,
     unreadCount: Number(record.unreadCount || 0),
     lastMessageStatus: record.lastMessageStatus || null,
   };
@@ -252,9 +289,10 @@ export function messageFrom(record: Record<string, any>, id: string): ChatMessag
     type: record.type || 'text',
     text: String(record.text || ''),
     status: record.status,
-    createdAt: record.createdAt,
+    createdAt: new Date(record.createdAt).toISOString(),
     ...(record.providerAt ? { providerAt: record.providerAt } : {}),
     ...(record.error ? { error: record.error } : {}),
+    ...(record.source === 'phone_history' ? { source: 'phone_history' as const } : {}),
   };
 }
 function callbackUrl(env: ChatEnvironment, uid: string) {
@@ -380,7 +418,8 @@ export async function handleAccountChat(
     const personal = binding?.data.mode === 'personal';
     const personalState = personal ? await personalStatus(store) : null;
     const connection = personal ? null : await readChatConnection(store);
-    const webhookStatus = env.serviceAccountJson ? await store.read('inboxStatus/webhook') : null;
+    const webhookStatus =
+      env.serviceAccountJson && !personal ? await store.read('inboxStatus/webhook') : null;
     const configuration = personal
       ? {
           provider: 'personal' as const,
@@ -405,13 +444,105 @@ export async function handleAccountChat(
           ...inboxConfiguration(env, connection, uid, webhookStatus?.data || null),
         };
     const path = new URL(request.url).pathname.replace(/\/$/, '');
+    if (path === '/api/account/inbox/sync' && request.method === 'POST') {
+      if (!personal)
+        throw new ChatError(409, 'Phone chat sync is available for linked WhatsApp accounts.');
+      if (role !== 'owner')
+        throw new ChatError(403, 'Only the workspace owner can request phone history.');
+      return chatJson({ history: await requestPersonalHistory(store) });
+    }
+    if (path === '/api/account/inbox/contacts' && request.method === 'GET') {
+      if (!personal) throw new ChatError(409, 'Phone contacts are available for linked WhatsApp.');
+      const listed = await store.list('personalContacts', 'name asc', 1000);
+      return chatJson({
+        contacts: listed.docs.map((d) => ({
+          id: d.name.split('/').pop(),
+          name: String(d.data.name || d.data.phone),
+          phone: String(d.data.phone || ''),
+        })),
+        truncated: listed.truncated,
+      });
+    }
+    if (path === '/api/account/inbox/start' && request.method === 'POST') {
+      if (!personal)
+        throw new ChatError(
+          409,
+          'Use an approved template or an existing conversation for the Meta Business API.',
+        );
+      const parsed = z
+        .object({
+          phone: z.string().trim().min(8).max(32),
+          name: z.string().trim().max(120).optional(),
+        })
+        .strict()
+        .safeParse(JSON.parse(new TextDecoder().decode(await readChatBody(request, 4096))));
+      if (!parsed.success)
+        throw new ChatError(400, 'Enter a WhatsApp phone number with its country code.');
+      let phone = '';
+      try {
+        phone = normalizePhone(parsed.data.phone);
+      } catch {
+        throw new ChatError(400, 'Enter a valid WhatsApp number with its country code.');
+      }
+      const id = (await chatHash(phone)).slice(0, 32),
+        old = await store.read(`conversations/${id}`);
+      if (!old) {
+        const [contact, customer] = await Promise.all([
+          store.read(`personalContacts/${id}`),
+          store.read(`customers/${id}`),
+        ]);
+        const conversation = {
+          ...conversationFrom(
+            {
+              phone,
+              customerId: id,
+              customerName:
+                customer?.data.name || contact?.data.name || parsed.data.name || `+${phone}`,
+            },
+            id,
+          ),
+          ownerId: uid,
+          provider: 'personal',
+        };
+        try {
+          await store.commit([
+            store.write(`conversations/${id}`, conversation, null),
+            store.write(
+              'inboxStatus/personalRevision',
+              { at: new Date().toISOString() },
+              undefined,
+            ),
+          ]);
+        } catch (e) {
+          if (!(e instanceof ChatError && e.status === 409)) throw e;
+        }
+      }
+      return chatJson(
+        { conversation: conversationFrom((await store.read(`conversations/${id}`))!.data, id) },
+        201,
+      );
+    }
     if (path === '/api/account/inbox' && request.method === 'GET') {
+      const revisionDoc = personal ? await store.read('inboxStatus/personalRevision') : null;
+      const revision = personal ? revisionDoc?.updateTime || 'empty' : undefined;
+      const history = personal ? await personalHistoryStatus(store) : undefined;
+      if (personal && new URL(request.url).searchParams.get('revision') === revision)
+        return chatJson({
+          ...configuration,
+          revision,
+          history,
+          unchanged: true,
+          workspaceId: uid,
+          role,
+          canWrite,
+        });
       const listed = await store.list('conversations', 'lastMessageAt desc', 500);
       const metadata = env.serviceAccountJson
         ? await store.list('conversationMeta', 'updatedAt desc', 500)
         : null;
       const result: ChatInboxResponse = {
         ...configuration,
+        ...(personal ? { history, revision } : {}),
         workspaceId: uid,
         role,
         canWrite,
@@ -443,7 +574,60 @@ export async function handleAccountChat(
       id,
     );
     if (request.method === 'GET' && !match[2]) {
-      const listed = await store.list(`conversations/${id}/messages`, 'createdAt desc', 100);
+      const revision = existing?.updateTime || 'empty';
+      if (
+        personal &&
+        !new URL(request.url).searchParams.has('before') &&
+        new URL(request.url).searchParams.get('revision') === revision
+      )
+        return chatJson({
+          ...configuration,
+          workspaceId: uid,
+          role,
+          canWrite,
+          revision,
+          unchanged: true,
+          windowOpen: true,
+        });
+      let cursor: { at: string; id: string } | null = null;
+      const before = new URL(request.url).searchParams.get('before');
+      if (before) {
+        if (!personal || before.length > 512) throw new ChatError(400, 'Invalid message cursor.');
+        try {
+          const parsed = z
+            .object({ at: z.string().datetime(), id: z.string().regex(/^[A-Za-z0-9_-]{1,150}$/) })
+            .strict()
+            .parse(JSON.parse(Buffer.from(before, 'base64url').toString()));
+          cursor = parsed;
+        } catch {
+          throw new ChatError(400, 'Invalid message cursor.');
+        }
+      }
+      const listed = personal
+        ? await store.messagesBefore(`conversations/${id}/messages`, cursor, 101)
+        : await store.list(`conversations/${id}/messages`, 'createdAt desc', 100);
+      const history = personal
+        ? await readPersonalHistory(store, id)
+        : { messages: [], clipped: false };
+      const merged = new Map<string, ChatMessage>(history.messages.map((m) => [m.id, m]));
+      for (const doc of listed.docs) {
+        const m = messageFrom(doc.data, doc.name.split('/').pop()!);
+        const old = merged.get(m.id);
+        merged.set(m.id, { ...m, status: old ? nextChatStatus(old.status, m.status) : m.status });
+      }
+      const sorted = [...merged.values()]
+        .filter(
+          (m) =>
+            !cursor || m.createdAt < cursor.at || (m.createdAt === cursor.at && m.id < cursor.id),
+        )
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+      const visible = sorted.slice(0, 100),
+        last = visible.at(-1),
+        more = sorted.length > 100 || listed.truncated;
+      const nextBefore =
+        personal && last && more
+          ? Buffer.from(JSON.stringify({ at: last.createdAt, id: last.id })).toString('base64url')
+          : null;
       const matchingSender = existing?.data.phoneNumberId === connection?.phoneNumberId;
       const windowOpen = personal || (matchingSender && chatWindowOpen(conversation.lastInboundAt));
       const result: ChatDetailResponse = {
@@ -452,10 +636,9 @@ export async function handleAccountChat(
         role,
         canWrite,
         conversation,
-        messages: listed.docs
-          .map((doc) => messageFrom(doc.data, doc.name.split('/').pop()!))
-          .reverse(),
-        recorded: listed.docs.length > 0,
+        messages: visible.reverse(),
+        ...(personal ? { nextBefore, historyClipped: history.clipped, revision } : {}),
+        recorded: visible.length > 0,
         windowOpen,
         replyBlock: replyBlockFor({
           configured: configuration.configured,
@@ -473,6 +656,15 @@ export async function handleAccountChat(
       if (existing && env.serviceAccountJson)
         await store.commit([
           store.write(`conversations/${id}`, { unreadCount: 0 }, existing, ['unreadCount']),
+          ...(personal
+            ? [
+                store.write(
+                  'inboxStatus/personalRevision',
+                  { at: new Date().toISOString() },
+                  undefined,
+                ),
+              ]
+            : []),
         ]);
       return chatJson({ success: true });
     }
@@ -679,6 +871,15 @@ export async function handleAccountChat(
             observed,
           ),
           store.write(`conversations/${id}`, summary, latestConversation),
+          ...(personal
+            ? [
+                store.write(
+                  'inboxStatus/personalRevision',
+                  { at: new Date().toISOString() },
+                  undefined,
+                ),
+              ]
+            : []),
           store.write(requestPath, { state: 'accepted', messageId, metaId }, requestDoc, [
             'state',
             'messageId',

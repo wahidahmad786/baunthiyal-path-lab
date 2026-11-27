@@ -11,6 +11,7 @@ import {
   ExternalLink,
   LoaderCircle,
   MessageCircle,
+  Plus,
   RefreshCw,
   Search,
   Send,
@@ -30,6 +31,7 @@ import { accountApi } from './ui';
 import { replyBlockFor } from '@/lib/chat-reply-state';
 import styles from './whatsapp-inbox.module.css';
 import TeamConversationTools, { workspacePath } from './team-conversation-tools';
+import WhatsAppNewChat from './whatsapp-new-chat';
 import type { ConversationMeta, TeamContext } from '@/lib/crm-types';
 
 type InboxResponse = ChatInboxResponse;
@@ -148,9 +150,20 @@ export default function WhatsAppInbox({
   const [detailError, setDetailError] = useState('');
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [newChat, setNewChat] = useState(false),
+    [syncBusy, setSyncBusy] = useState(false),
+    [syncError, setSyncError] = useState('');
+  const [olderMessages, setOlderMessages] = useState<ChatMessage[]>([]),
+    [olderBefore, setOlderBefore] = useState<string | null>(null),
+    [olderLoaded, setOlderLoaded] = useState(false),
+    [olderLoading, setOlderLoading] = useState(false);
+  const restoreScroll = useRef<{ height: number; top: number } | null>(null);
+
   const [sendError, setSendError] = useState('');
   const [copyMessage, setCopyMessage] = useState('');
   const [lastSynced, setLastSynced] = useState<string | null>(null);
+  const inboxRevision = useRef<string | undefined>(undefined),
+    detailRevision = useRef<string | undefined>(undefined);
   const inboxRequest = useRef(0);
   const detailRequest = useRef(0);
   const inboxInFlight = useRef(false);
@@ -174,12 +187,16 @@ export default function WhatsAppInbox({
     };
   }, [workspace]);
   function changeWorkspace(next: string) {
+    inboxRevision.current = undefined;
+    detailRevision.current = undefined;
     inboxRequest.current++;
     detailRequest.current++;
     inboxInFlight.current = false;
     setInbox(null);
     setDetail(null);
     setSelected(null);
+    setNewChat(false);
+    setSyncError('');
     setText('');
     sendAttempt.current = null;
     setAssignmentFilter('all');
@@ -200,14 +217,27 @@ export default function WhatsAppInbox({
       const request = ++inboxRequest.current;
       if (!quiet) setInboxLoading(true);
       try {
-        const result = await accountApi<InboxResponse>(workspacePath('account/inbox', workspace));
+        const inboxPath = workspacePath('account/inbox', workspace);
+        const result = await accountApi<InboxResponse>(
+          inboxPath +
+            (inboxRevision.current
+              ? (inboxPath.includes('?') ? '&' : '?') +
+                'revision=' +
+                encodeURIComponent(inboxRevision.current)
+              : ''),
+        );
         if (
           request !== inboxRequest.current ||
           labClientAuth().currentUser?.uid !== uid ||
           workspaceRef.current !== workspace
         )
           return;
-        setInbox(result);
+        inboxRevision.current = result.revision;
+        setInbox((old) =>
+          result.unchanged && old
+            ? { ...old, ...result, conversations: old.conversations, metadata: old.metadata }
+            : result,
+        );
         setInboxError('');
         setLastSynced(new Date().toISOString());
       } catch (error) {
@@ -233,7 +263,17 @@ export default function WhatsAppInbox({
       if (!quiet) setDetailLoading(true);
       try {
         const result = await accountApi<ConversationResponse>(
-          workspacePath(`account/inbox/${id}`, workspace),
+          (() => {
+            const path = workspacePath(`account/inbox/${id}`, workspace);
+            return (
+              path +
+              (detailRevision.current
+                ? (path.includes('?') ? '&' : '?') +
+                  'revision=' +
+                  encodeURIComponent(detailRevision.current)
+                : '')
+            );
+          })(),
         );
         if (
           request !== detailRequest.current ||
@@ -242,7 +282,18 @@ export default function WhatsAppInbox({
           labClientAuth().currentUser?.uid !== uid
         )
           return;
-        setDetail(result);
+        detailRevision.current = result.revision;
+        setDetail((old) =>
+          result.unchanged && old
+            ? {
+                ...old,
+                ...result,
+                conversation: old.conversation,
+                messages: old.messages,
+                recorded: old.recorded,
+              }
+            : result,
+        );
         setDetailError('');
       } catch (error) {
         if (
@@ -264,7 +315,7 @@ export default function WhatsAppInbox({
     void refreshInbox();
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') void refreshInbox(true);
-    }, 15000);
+    }, 5000);
     return () => {
       clearInterval(timer);
       inboxRequest.current++;
@@ -274,7 +325,12 @@ export default function WhatsAppInbox({
 
   useEffect(() => {
     detailRequest.current++;
+    detailRevision.current = undefined;
     setDetail(null);
+    setOlderMessages([]);
+    setOlderBefore(null);
+    setOlderLoaded(false);
+    setOlderLoading(false);
     setDetailError('');
     setSendError('');
     setText('');
@@ -283,7 +339,7 @@ export default function WhatsAppInbox({
     void refreshDetail(selected);
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') void refreshDetail(selected, true);
-    }, 15000);
+    }, 5000);
     return () => {
       clearInterval(timer);
       detailRequest.current++;
@@ -347,9 +403,10 @@ export default function WhatsAppInbox({
       : null);
   const messages = useMemo(() => {
     const byId = new Map<string, ChatMessage>();
+    for (const message of olderMessages) byId.set(message.id, message);
     for (const message of detail?.messages || []) byId.set(message.id, message);
     return [...byId.values()].sort((a, b) => parsedTime(a.createdAt) - parsedTime(b.createdAt));
-  }, [detail]);
+  }, [detail, olderMessages]);
   const latestMessage = messages.at(-1);
   useEffect(() => {
     const area = scrollArea.current;
@@ -357,6 +414,13 @@ export default function WhatsAppInbox({
     area.scrollTop = area.scrollHeight;
   }, [selected, latestMessage?.id]);
 
+  useEffect(() => {
+    if (restoreScroll.current && scrollArea.current) {
+      const old = restoreScroll.current;
+      scrollArea.current.scrollTop = scrollArea.current.scrollHeight - old.height + old.top;
+      restoreScroll.current = null;
+    }
+  }, [olderMessages.length]);
   const personalConnection = (detail?.provider ?? inbox?.provider) === 'personal';
   const configured = detail?.configured ?? inbox?.configured ?? false;
   const windowOpen = !!detail?.windowOpen;
@@ -443,9 +507,63 @@ export default function WhatsAppInbox({
     }
   }
 
+  async function syncChats() {
+    setSyncBusy(true);
+    setSyncError('');
+    try {
+      const r = await accountApi<{ history: InboxResponse['history'] }>(
+        workspacePath('account/inbox/sync', workspace),
+        {},
+      );
+      setInbox((old) => (old ? { ...old, history: r.history } : old));
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : 'Chat sync could not start.');
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+  async function loadEarlier() {
+    const cursor = olderLoaded ? olderBefore : detail?.nextBefore,
+      chatId = selected,
+      actor = labClientAuth().currentUser?.uid,
+      space = workspace;
+    if (!cursor || !chatId || olderLoading) return;
+    setOlderLoading(true);
+    try {
+      const base = workspacePath(`account/inbox/${chatId}`, space),
+        url = base + (base.includes('?') ? '&' : '?') + 'before=' + encodeURIComponent(cursor);
+      const page = await accountApi<ConversationResponse>(url);
+      if (
+        selectedRef.current !== chatId ||
+        workspaceRef.current !== space ||
+        labClientAuth().currentUser?.uid !== actor
+      )
+        return;
+      if (scrollArea.current)
+        restoreScroll.current = {
+          height: scrollArea.current.scrollHeight,
+          top: scrollArea.current.scrollTop,
+        };
+      setOlderMessages((old) => [...old, ...(detail?.messages || []), ...page.messages]);
+      setOlderBefore(page.nextBefore || null);
+      setOlderLoaded(true);
+    } catch (e) {
+      setDetailError(e instanceof Error ? e.message : 'Earlier messages could not load.');
+    } finally {
+      setOlderLoading(false);
+    }
+  }
   function chooseContact(id: string) {
     setSelected(id);
     onSelect?.(id);
+    if (window.innerWidth <= 760)
+      setTimeout(
+        () =>
+          document
+            .querySelector('[aria-label="Customer conversations"]')
+            ?.parentElement?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+        50,
+      );
   }
 
   return (
@@ -461,11 +579,13 @@ export default function WhatsAppInbox({
           </div>
         </div>
         <div className={styles.headingActions}>
-          <span>Auto-refresh · 15 sec</span>
+          <span>Auto-refresh · 5 sec</span>
           <button
             type="button"
             className="button secondary small-button"
             onClick={() => {
+              inboxRevision.current = undefined;
+              detailRevision.current = undefined;
               void refreshInbox();
               if (selected) void refreshDetail(selected, true);
             }}
@@ -499,6 +619,48 @@ export default function WhatsAppInbox({
           </span>
         )}
       </div>
+      {personalConnection && (
+        <div className={styles.syncBar} role="status">
+          <div>
+            <strong>
+              {inbox?.history?.phase === 'ready' ? 'Phone chats synced' : 'WhatsApp chat sync'}
+            </strong>
+            <p>
+              {inbox?.history?.message ||
+                'Sync available chat history and contact names from your phone.'}
+            </p>
+            {inbox?.history?.progress != null && (
+              <progress
+                max={100}
+                value={inbox.history.progress}
+                aria-label="Chat history sync progress"
+              />
+            )}
+          </div>
+          {(inbox?.role || team?.role || 'owner') === 'owner' && (
+            <div className={styles.syncActions}>
+              <button
+                className="button secondary small-button"
+                disabled={syncBusy || !configured}
+                onClick={() => void syncChats()}
+              >
+                <RefreshCw size={14} className={syncBusy ? 'spin' : undefined} />
+                {syncBusy ? 'Requesting…' : 'Sync chats'}
+              </button>
+              {inbox?.history?.phase === 'needs_relink' && onOpenIntegration && isOwnWorkspace && (
+                <button className="text-button" onClick={onOpenIntegration}>
+                  Re-link for history
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {syncError && (
+        <div className={styles.error} role="alert">
+          {syncError}
+        </div>
+      )}
       {teamError && (
         <div className={styles.error} role="alert">
           {teamError}
@@ -592,8 +754,18 @@ export default function WhatsAppInbox({
       <div className={`${styles.shell} ${selected ? styles.hasSelection : ''}`}>
         <aside className={styles.threads} aria-label="Customer conversations">
           <div className={styles.threadHeading}>
-            <h3>Customers</h3>
+            <h3>{personalConnection ? 'Chats' : 'Customers'}</h3>
             <span>{contacts.length}</span>
+            {personalConnection && canWrite && (
+              <button
+                className={`icon-button ${styles.newChat}`}
+                onClick={() => setNewChat(true)}
+                aria-label="New WhatsApp chat"
+                title="New chat"
+              >
+                <Plus size={20} />
+              </button>
+            )}
           </div>
           <label className={styles.search}>
             <Search size={16} />
@@ -666,7 +838,9 @@ export default function WhatsAppInbox({
                 <p>
                   {query
                     ? 'Try another name or phone number.'
-                    : 'Registered customers and incoming API conversations will appear here.'}
+                    : personalConnection
+                      ? 'Sync chats from your phone, or use + to start a conversation with a WhatsApp number.'
+                      : 'Registered customers and incoming API conversations will appear here.'}
                 </p>
               </div>
             )}
@@ -724,7 +898,10 @@ export default function WhatsAppInbox({
                   customerId={activeContact.id}
                   context={team}
                   onQuickReply={setText}
-                  onChanged={() => void refreshInbox(true)}
+                  onChanged={() => {
+                    inboxRevision.current = undefined;
+                    void refreshInbox(true);
+                  }}
                 />
               )}
               <div
@@ -739,6 +916,20 @@ export default function WhatsAppInbox({
                     <AlertCircle size={16} />
                     <span>{detailError}</span>
                   </div>
+                )}
+                {personalConnection && (olderLoaded ? olderBefore : detail?.nextBefore) && (
+                  <button
+                    className={`button secondary small-button ${styles.loadEarlier}`}
+                    disabled={olderLoading}
+                    onClick={() => void loadEarlier()}
+                  >
+                    {olderLoading ? 'Loading earlier messages…' : 'Load earlier messages'}
+                  </button>
+                )}
+                {detail?.historyClipped && (
+                  <p className={styles.historyNote}>
+                    Showing available recent history. Older messages may remain on your phone.
+                  </p>
                 )}
                 {detailLoading && !detail ? (
                   <div className={styles.chatEmpty} role="status">
@@ -803,7 +994,7 @@ export default function WhatsAppInbox({
                       <h3>No portal message recorded</h3>
                       <p>
                         {personalConnection
-                          ? 'New messages from your linked WhatsApp will appear here. Existing phone chat history is not imported.'
+                          ? 'Available phone history and new messages appear here after sync. You can type a message below to start this conversation.'
                           : 'Messages received through the connected WhatsApp API will appear here. Existing chats in the WhatsApp app are not automatically imported.'}
                       </p>
                       {activeContact && (
@@ -859,8 +1050,12 @@ export default function WhatsAppInbox({
                       !canWrite
                         ? 'Read-only team access'
                         : canReply
-                          ? 'Type an API reply…'
-                          : 'Draft a message for the WhatsApp app (API reply unavailable)…'
+                          ? personalConnection
+                            ? 'Type a message…'
+                            : 'Type an API reply…'
+                          : personalConnection
+                            ? 'Connect WhatsApp to send your message…'
+                            : 'Draft a message for the WhatsApp app (API reply unavailable)…'
                     }
                     value={text}
                     maxLength={4096}
@@ -887,7 +1082,12 @@ export default function WhatsAppInbox({
                     className={styles.sendButton}
                     disabled={!canReply || !text.trim() || sending}
                     aria-label="Send WhatsApp reply"
-                    title={!canReply ? replyBlock?.title || 'API reply unavailable' : 'Send reply'}
+                    title={
+                      !canReply
+                        ? replyBlock?.title ||
+                          (personalConnection ? 'WhatsApp unavailable' : 'API reply unavailable')
+                        : 'Send reply'
+                    }
                   >
                     {sending ? <LoaderCircle className="spin" size={20} /> : <Send size={20} />}
                   </button>
@@ -916,8 +1116,9 @@ export default function WhatsAppInbox({
               </span>
               <h3>Every conversation, cared for.</h3>
               <p>
-                Select a customer to view recorded WhatsApp messages, check their delivery status or
-                open a chat in WhatsApp.
+                {personalConnection
+                  ? 'Select a chat to read messages and reply here. Use + to open a new WhatsApp conversation.'
+                  : 'Select a customer to view recorded WhatsApp messages, check their delivery status or open a chat in WhatsApp.'}
               </p>
               <span className={styles.trust}>
                 <ShieldCheck size={15} /> Private conversations · Real message status
@@ -926,6 +1127,17 @@ export default function WhatsAppInbox({
           )}
         </div>
       </div>
+      {newChat && personalConnection && canWrite && (
+        <WhatsAppNewChat
+          key={workspace}
+          workspace={workspace}
+          onClose={() => setNewChat(false)}
+          onOpen={(id) => {
+            chooseContact(id);
+            void refreshInbox(true);
+          }}
+        />
+      )}
     </section>
   );
 }

@@ -10,6 +10,7 @@ export type ChatMessage = {
   createdAt: string;
   providerAt?: string;
   error?: string;
+  source?: 'phone_history';
 };
 export type ChatConversation = {
   assignedTo?: string | null;
@@ -44,6 +45,10 @@ export type ChatReplyBlock = {
 };
 export type ChatInboxResponse = {
   provider?: 'meta' | 'personal';
+  revision?: string;
+  unchanged?: boolean;
+  history?: import('./personal-history').PersonalHistoryStatus;
+  phoneContacts?: { id: string; name: string; phone: string }[];
   metadata?: Record<string, import('./crm-types').ConversationMeta>;
   workspaceId?: string;
   role?: 'owner' | 'staff' | 'viewer';
@@ -65,6 +70,10 @@ export type ChatInboxResponse = {
 };
 export type ChatDetailResponse = {
   provider?: 'meta' | 'personal';
+  revision?: string;
+  unchanged?: boolean;
+  nextBefore?: string | null;
+  historyClipped?: boolean;
   workspaceId?: string;
   role?: 'owner' | 'staff' | 'viewer';
   canWrite?: boolean;
