@@ -293,7 +293,7 @@ export function InboxAttachmentView({
   const status = media.pending ? `Loading ${name.toLowerCase()}…` : `${name} unavailable`;
   const onPlaybackError = () => setBroken(media.url || '');
   return (
-    <span className={styles.attachment} ref={media.anchor}>
+    <span className={styles.attachment} data-kind={kind} ref={media.anchor}>
       {inline && ready && (
         <a
           href={ready}
