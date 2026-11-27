@@ -558,7 +558,14 @@ export default function WhatsAppInbox({
   const canWrite =
     (detail?.canWrite ?? inbox?.canWrite ?? team?.canWrite) !== false &&
     (isOwnWorkspace || !!team?.canWrite);
-  const canReply = canWrite && configured && windowOpen && !!activeContact && !detailError;
+  const canReply =
+    canWrite &&
+    configured &&
+    windowOpen &&
+    !!activeContact &&
+    detail?.conversation.id === selected &&
+    activeContact.id === selected &&
+    !detailError;
   const canAttach = personalConnection && canReply;
   const draftCanHaveCaption = attachmentDraft && attachmentDraft.kind !== 'audio';
   const reason = detail?.reason || inbox?.reason;
@@ -741,6 +748,12 @@ export default function WhatsAppInbox({
     }
   }
   function chooseContact(id: string) {
+    if (selectedRef.current !== id) {
+      setText('');
+      clearAttachment();
+      setSendError('');
+      sendAttempt.current = null;
+    }
     setSelected(id);
     onSelect?.(id);
     if (window.matchMedia('(max-width: 690px)').matches)
