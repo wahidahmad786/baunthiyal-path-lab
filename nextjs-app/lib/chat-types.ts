@@ -12,6 +12,9 @@ export type ChatMessage = {
   error?: string;
 };
 export type ChatConversation = {
+  assignedTo?: string | null;
+  labels?: string[];
+  status?: 'open' | 'resolved';
   id: string;
   customerId: string;
   phone: string;
@@ -40,6 +43,10 @@ export type ChatReplyBlock = {
   message: string;
 };
 export type ChatInboxResponse = {
+  metadata?: Record<string, import('./crm-types').ConversationMeta>;
+  workspaceId?: string;
+  role?: 'owner' | 'staff' | 'viewer';
+  canWrite?: boolean;
   senderPhone: string | null;
   senderName: string;
   testSender: boolean;
@@ -56,6 +63,9 @@ export type ChatInboxResponse = {
   truncated?: boolean;
 };
 export type ChatDetailResponse = {
+  workspaceId?: string;
+  role?: 'owner' | 'staff' | 'viewer';
+  canWrite?: boolean;
   senderPhone: string | null;
   senderName: string;
   testSender: boolean;

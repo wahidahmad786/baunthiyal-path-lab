@@ -54,6 +54,10 @@ import WhatsAppIntegration from './whatsapp-integration';
 import PublicHome from './public-home';
 import TestCatalog from './test-catalog';
 import WhatsAppInbox from './whatsapp-inbox';
+import TemplateManager from './template-manager';
+import { FileText } from 'lucide-react';
+import TeamSettings from './team-settings';
+import ConnectionAlerts from './connection-alerts';
 import type { CatalogEntry } from '@/lib/catalog-types';
 import { Campaign, Customer, Offer, Booking, calculateROI } from '@/lib/domain';
 import { api, accountApi, Modal, Notice, Field, Submit, dateLabel } from './ui';
@@ -107,6 +111,8 @@ const nav = [
   { id: 'offers', label: 'Offers & packages', icon: Tag },
   { id: 'audience', label: 'Customer audience', icon: Users },
   { id: 'inbox', label: 'WhatsApp Inbox', icon: MessageCircle },
+  { id: 'templates', label: 'Template Manager', icon: FileText },
+  { id: 'team', label: 'Team & quick replies', icon: Users },
   { id: 'bookings', label: 'Booking requests', icon: CalendarDays },
   { id: 'analytics', label: 'Campaign analytics', icon: BarChart3 },
 ];
@@ -120,6 +126,8 @@ const titles: Record<string, string> = {
   whatsapp: 'WhatsApp Integration',
   catalog: 'Tests & packages',
   inbox: 'WhatsApp Inbox',
+  templates: 'Template Manager',
+  team: 'Team & quick replies',
 };
 export default function Dashboard() {
   const [section, setSection] = useState('overview');
@@ -180,6 +188,7 @@ export default function Dashboard() {
   const [modal, setModal] = useState<string | null>(null);
   const [selected, setSelected] = useState<Campaign | null>(null);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [inboxWorkspaceId, setInboxWorkspaceId] = useState('');
   const [booking, setBooking] = useState<Booking | null>(null);
   const [messages, setMessages] = useState<Record<string, unknown>[]>([]);
   const [busy, setBusy] = useState(false);
@@ -553,14 +562,24 @@ export default function Dashboard() {
                   : 'WhatsApp Business'}
             </span>
             <div className="top-divider" />
-            <button
-              className="icon-button notification-button"
-              aria-label={`${requests} pending booking requests`}
-              onClick={() => navigate('bookings')}
-            >
-              <Bell size={19} />
-              {requests > 0 && <i />}
-            </button>
+            {previewIdentity ? (
+              <ConnectionAlerts
+                key={previewIdentity.uid}
+                bookings={requests}
+                onOpenBookings={() => navigate('bookings')}
+                onOpenIntegration={() => navigate('whatsapp')}
+                onHealthy={setWhatsappVerified}
+              />
+            ) : (
+              <button
+                className="icon-button notification-button"
+                aria-label={`${requests} pending booking requests`}
+                onClick={() => navigate('bookings')}
+              >
+                <Bell size={19} />
+                {requests > 0 && <i />}
+              </button>
+            )}
             <div className="avatar small">BL</div>
           </div>
         </header>
@@ -588,10 +607,14 @@ export default function Dashboard() {
                               ? 'Turn a conversation into a step toward better health.'
                               : section === 'analytics'
                                 ? 'Understand the impact of every conversation.'
-                                : 'Manage your WhatsApp Business connection in one place.'}
+                                : section === 'templates'
+                                  ? 'Create templates and follow their approval status in Meta.'
+                                  : section === 'team'
+                                    ? 'Share your inbox with authorized staff and prepare quick replies.'
+                                    : 'Manage your WhatsApp Business connection in one place.'}
               </p>
             </div>
-            {!['whatsapp', 'inbox', 'catalog'].includes(section) && (
+            {!['whatsapp', 'inbox', 'catalog', 'templates', 'team'].includes(section) && (
               <div className="heading-actions">
                 <button
                   className="button secondary"
@@ -1026,6 +1049,7 @@ export default function Dashboard() {
                                   className="text-button customer-chat-link"
                                   onClick={() => {
                                     setSelectedChatId(c.id);
+                                    setInboxWorkspaceId('');
                                     navigate('inbox');
                                   }}
                                 >
@@ -1061,6 +1085,7 @@ export default function Dashboard() {
                                   className="text-button"
                                   onClick={() => {
                                     setSelectedChatId(c.id);
+                                    setInboxWorkspaceId('');
                                     navigate('inbox');
                                   }}
                                 >
@@ -1260,6 +1285,22 @@ export default function Dashboard() {
           {section === 'whatsapp' && previewIdentity && (
             <WhatsAppIntegration onConnectionChange={setWhatsappVerified} />
           )}
+          {section === 'templates' && previewIdentity && (
+            <TemplateManager
+              key={previewIdentity.uid}
+              onOpenIntegration={() => navigate('whatsapp')}
+            />
+          )}
+          {section === 'team' && previewIdentity && (
+            <TeamSettings
+              key={previewIdentity.uid}
+              onOpenInbox={(workspace) => {
+                setInboxWorkspaceId(workspace);
+                setSelectedChatId(null);
+                navigate('inbox');
+              }}
+            />
+          )}
           {section === 'catalog' && (
             <TestCatalog
               tests={data.tests}
@@ -1277,6 +1318,7 @@ export default function Dashboard() {
             <WhatsAppInbox
               key={previewIdentity.uid}
               customers={data.customers}
+              initialWorkspaceId={inboxWorkspaceId}
               selectedCustomerId={selectedChatId}
               onSelect={setSelectedChatId}
               onOpenIntegration={() => navigate('whatsapp')}

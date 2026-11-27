@@ -29,6 +29,8 @@ import { labClientAuth } from '@/lib/client-auth';
 import { accountApi } from './ui';
 import { replyBlockFor } from '@/lib/chat-reply-state';
 import styles from './whatsapp-inbox.module.css';
+import TeamConversationTools, { workspacePath } from './team-conversation-tools';
+import type { ConversationMeta, TeamContext } from '@/lib/crm-types';
 
 type InboxResponse = ChatInboxResponse;
 type ConversationResponse = ChatDetailResponse;
@@ -37,12 +39,14 @@ type Contact = {
   name: string;
   phone: string;
   conversation?: ChatConversation;
+  meta?: ConversationMeta;
 };
 type Props = {
   customers: Customer[];
   selectedCustomerId?: string | null;
   onSelect?: (id: string) => void;
   onOpenIntegration?: () => void;
+  initialWorkspaceId?: string;
 };
 
 const labels: Record<ChatMessageStatus, string> = {
@@ -121,7 +125,19 @@ export default function WhatsAppInbox({
   selectedCustomerId,
   onSelect,
   onOpenIntegration,
+  initialWorkspaceId = '',
 }: Props) {
+  const ownUid = labClientAuth().currentUser?.uid || '';
+  const [workspace, setWorkspace] = useState(
+    initialWorkspaceId === ownUid ? '' : initialWorkspaceId,
+  );
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+  const [team, setTeam] = useState<TeamContext | null>(null),
+    [teamError, setTeamError] = useState('');
+  const [assignmentFilter, setAssignmentFilter] = useState('all'),
+    [labelFilter, setLabelFilter] = useState('');
+  const isOwnWorkspace = !workspace || workspace === ownUid;
   const [selected, setSelected] = useState<string | null>(selectedCustomerId || null);
   const [query, setQuery] = useState('');
   const [inbox, setInbox] = useState<InboxResponse | null>(null);
@@ -142,63 +158,107 @@ export default function WhatsAppInbox({
   const sendAttempt = useRef<{ customerId: string; text: string; requestId: string } | null>(null);
   const selectedRef = useRef<string | null>(selected);
   selectedRef.current = selected;
+  useEffect(() => {
+    let active = true;
+    setTeam(null);
+    setTeamError('');
+    accountApi<TeamContext>(workspacePath('account/team', workspace))
+      .then((result) => {
+        if (active) setTeam(result);
+      })
+      .catch((error) => {
+        if (active) setTeamError(error.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [workspace]);
+  function changeWorkspace(next: string) {
+    inboxRequest.current++;
+    detailRequest.current++;
+    inboxInFlight.current = false;
+    setInbox(null);
+    setDetail(null);
+    setSelected(null);
+    setText('');
+    sendAttempt.current = null;
+    setAssignmentFilter('all');
+    setLabelFilter('');
+    setWorkspace(next === ownUid ? '' : next);
+  }
 
   useEffect(() => {
     if (selectedCustomerId !== undefined) setSelected(selectedCustomerId || null);
   }, [selectedCustomerId]);
 
-  const refreshInbox = useCallback(async (quiet = false) => {
-    if (inboxInFlight.current) return;
-    const uid = labClientAuth().currentUser?.uid;
-    if (!uid) return;
-    inboxInFlight.current = true;
-    const request = ++inboxRequest.current;
-    if (!quiet) setInboxLoading(true);
-    try {
-      const result = await accountApi<InboxResponse>('account/inbox');
-      if (request !== inboxRequest.current || labClientAuth().currentUser?.uid !== uid) return;
-      setInbox(result);
-      setInboxError('');
-      setLastSynced(new Date().toISOString());
-    } catch (error) {
-      if (request === inboxRequest.current && labClientAuth().currentUser?.uid === uid)
-        setInboxError(
-          error instanceof Error ? error.message : 'Unable to load your conversations.',
-        );
-    } finally {
-      inboxInFlight.current = false;
-      if (request === inboxRequest.current) setInboxLoading(false);
-    }
-  }, []);
+  const refreshInbox = useCallback(
+    async (quiet = false) => {
+      if (inboxInFlight.current) return;
+      const uid = labClientAuth().currentUser?.uid;
+      if (!uid) return;
+      inboxInFlight.current = true;
+      const request = ++inboxRequest.current;
+      if (!quiet) setInboxLoading(true);
+      try {
+        const result = await accountApi<InboxResponse>(workspacePath('account/inbox', workspace));
+        if (
+          request !== inboxRequest.current ||
+          labClientAuth().currentUser?.uid !== uid ||
+          workspaceRef.current !== workspace
+        )
+          return;
+        setInbox(result);
+        setInboxError('');
+        setLastSynced(new Date().toISOString());
+      } catch (error) {
+        if (request === inboxRequest.current && labClientAuth().currentUser?.uid === uid)
+          setInboxError(
+            error instanceof Error ? error.message : 'Unable to load your conversations.',
+          );
+      } finally {
+        if (request === inboxRequest.current) {
+          inboxInFlight.current = false;
+          setInboxLoading(false);
+        }
+      }
+    },
+    [workspace],
+  );
 
-  const refreshDetail = useCallback(async (id: string, quiet = false) => {
-    const uid = labClientAuth().currentUser?.uid;
-    if (!uid) return;
-    const request = ++detailRequest.current;
-    if (!quiet) setDetailLoading(true);
-    try {
-      const result = await accountApi<ConversationResponse>(`account/inbox/${id}`);
-      if (
-        request !== detailRequest.current ||
-        selectedRef.current !== id ||
-        labClientAuth().currentUser?.uid !== uid
-      )
-        return;
-      setDetail(result);
-      setDetailError('');
-    } catch (error) {
-      if (
-        request === detailRequest.current &&
-        selectedRef.current === id &&
-        labClientAuth().currentUser?.uid === uid
-      )
-        setDetailError(
-          error instanceof Error ? error.message : 'Unable to load this conversation.',
+  const refreshDetail = useCallback(
+    async (id: string, quiet = false) => {
+      const uid = labClientAuth().currentUser?.uid;
+      if (!uid) return;
+      const request = ++detailRequest.current;
+      if (!quiet) setDetailLoading(true);
+      try {
+        const result = await accountApi<ConversationResponse>(
+          workspacePath(`account/inbox/${id}`, workspace),
         );
-    } finally {
-      if (request === detailRequest.current) setDetailLoading(false);
-    }
-  }, []);
+        if (
+          request !== detailRequest.current ||
+          selectedRef.current !== id ||
+          workspaceRef.current !== workspace ||
+          labClientAuth().currentUser?.uid !== uid
+        )
+          return;
+        setDetail(result);
+        setDetailError('');
+      } catch (error) {
+        if (
+          request === detailRequest.current &&
+          selectedRef.current === id &&
+          labClientAuth().currentUser?.uid === uid
+        )
+          setDetailError(
+            error instanceof Error ? error.message : 'Unable to load this conversation.',
+          );
+      } finally {
+        if (request === detailRequest.current) setDetailLoading(false);
+      }
+    },
+    [workspace],
+  );
 
   useEffect(() => {
     void refreshInbox();
@@ -232,7 +292,7 @@ export default function WhatsAppInbox({
 
   const contacts = useMemo(() => {
     const items = new Map<string, Contact>();
-    for (const customer of customers)
+    for (const customer of isOwnWorkspace ? customers : team?.contacts || [])
       items.set(customer.id, {
         id: customer.id,
         name: customer.name,
@@ -248,14 +308,31 @@ export default function WhatsAppInbox({
         conversation,
       });
     }
-    return [...items.values()].sort((a, b) => {
-      const difference =
-        parsedTime(b.conversation?.lastMessageAt) - parsedTime(a.conversation?.lastMessageAt);
-      return difference || a.name.localeCompare(b.name);
-    });
-  }, [customers, inbox]);
-  const filteredContacts = contacts.filter((contact) =>
-    `${contact.name} ${contact.phone}`.toLowerCase().includes(query.toLowerCase()),
+    return [...items.values()]
+      .map((item) => ({
+        ...item,
+        meta: inbox?.metadata?.[item.id] || {
+          assignedTo: item.conversation?.assignedTo || null,
+          labels: item.conversation?.labels || [],
+          status: item.conversation?.status || 'open',
+        },
+      }))
+      .sort((a, b) => {
+        const difference =
+          parsedTime(b.conversation?.lastMessageAt) - parsedTime(a.conversation?.lastMessageAt);
+        return difference || a.name.localeCompare(b.name);
+      });
+  }, [customers, inbox, isOwnWorkspace, team]);
+  const filteredContacts = contacts.filter(
+    (contact) =>
+      `${contact.name} ${contact.phone}`.toLowerCase().includes(query.toLowerCase()) &&
+      (assignmentFilter !== 'mine' || contact.meta?.assignedTo === ownUid) &&
+      (assignmentFilter !== 'open' || contact.meta?.status === 'open') &&
+      (assignmentFilter !== 'resolved' || contact.meta?.status === 'resolved') &&
+      (!labelFilter ||
+        contact.meta?.labels.some((label) =>
+          label.toLowerCase().includes(labelFilter.toLowerCase()),
+        )),
   );
   const contact = contacts.find((item) => item.id === selected);
   const activeContact: Contact | null =
@@ -282,8 +359,11 @@ export default function WhatsAppInbox({
 
   const configured = detail?.configured ?? inbox?.configured ?? false;
   const windowOpen = !!detail?.windowOpen;
-  const canReply = configured && windowOpen && !!activeContact && !detailError;
-  const webhookUrl = detail?.webhookUrl || inbox?.webhookUrl;
+  const canWrite =
+    (detail?.canWrite ?? inbox?.canWrite ?? team?.canWrite) !== false &&
+    (isOwnWorkspace || !!team?.canWrite);
+  const canReply = canWrite && configured && windowOpen && !!activeContact && !detailError;
+  const webhookUrl = isOwnWorkspace ? detail?.webhookUrl || inbox?.webhookUrl : null;
   const reason = detail?.reason || inbox?.reason;
   const senderPhone = detail?.senderPhone || inbox?.senderPhone;
   const testSender = detail?.testSender ?? inbox?.testSender ?? false;
@@ -314,11 +394,19 @@ export default function WhatsAppInbox({
     setSending(true);
     setSendError('');
     try {
-      const result = await accountApi<{ message: ChatMessage }>(`account/inbox/${id}/send`, {
-        text: value,
-        requestId: attempt.requestId,
-      });
-      if (labClientAuth().currentUser?.uid !== uid || selectedRef.current !== id) return;
+      const result = await accountApi<{ message: ChatMessage }>(
+        workspacePath(`account/inbox/${id}/send`, workspace),
+        {
+          text: value,
+          requestId: attempt.requestId,
+        },
+      );
+      if (
+        labClientAuth().currentUser?.uid !== uid ||
+        selectedRef.current !== id ||
+        workspaceRef.current !== workspace
+      )
+        return;
       setDetail((current) =>
         current
           ? {
@@ -387,6 +475,39 @@ export default function WhatsAppInbox({
           </button>
         </div>
       </div>
+      <div className="crm-inbox-workspace">
+        <label>
+          Inbox workspace
+          <select
+            aria-label="Inbox workspace"
+            value={workspace || ownUid}
+            onChange={(e) => changeWorkspace(e.target.value)}
+          >
+            {(
+              team?.workspaces || [{ id: ownUid, name: 'My WhatsApp workspace', role: 'owner' }]
+            ).map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name} · {w.role}
+              </option>
+            ))}
+          </select>
+        </label>
+        {team && (
+          <span className="badge muted">
+            {team.role === 'viewer' ? 'Read-only access' : 'Team access: ' + team.role}
+          </span>
+        )}
+      </div>
+      {teamError && (
+        <div className={styles.error} role="alert">
+          {teamError}
+        </div>
+      )}
+      {team?.contactsTruncated && (
+        <p className="crm-muted">
+          Showing the latest 200 registered customers along with recorded conversations.
+        </p>
+      )}
       {inboxError && (
         <div className={styles.error} role="alert">
           <AlertCircle size={16} />
@@ -409,7 +530,7 @@ export default function WhatsAppInbox({
               ? 'This API is connected to a Meta test number. It supports the test recipients added in Meta, and is not your lab’s mobile WhatsApp number. To use your lab number while keeping its WhatsApp Business app, use supported Coexistence onboarding.'
               : 'API messages use this number. A verified connection does not open a reply window for every customer.'}
           </p>
-          {onOpenIntegration && (
+          {onOpenIntegration && isOwnWorkspace && (
             <button className="text-button" type="button" onClick={onOpenIntegration}>
               View connected number
             </button>
@@ -427,7 +548,7 @@ export default function WhatsAppInbox({
               You can open a customer in WhatsApp while completing the connection.
             </p>
           </div>
-          {onOpenIntegration && (
+          {onOpenIntegration && isOwnWorkspace && (
             <button className="button secondary small-button" onClick={onOpenIntegration}>
               <Settings2 size={14} />
               Connection
@@ -474,6 +595,24 @@ export default function WhatsAppInbox({
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
+          <div className="crm-inbox-filters">
+            <select
+              aria-label="Filter conversations"
+              value={assignmentFilter}
+              onChange={(e) => setAssignmentFilter(e.target.value)}
+            >
+              <option value="all">All conversations</option>
+              <option value="mine">Assigned to me</option>
+              <option value="open">Open</option>
+              <option value="resolved">Resolved</option>
+            </select>
+            <input
+              aria-label="Filter by label"
+              placeholder="Filter by label"
+              value={labelFilter}
+              onChange={(e) => setLabelFilter(e.target.value)}
+            />
+          </div>
           <div className={styles.contactList}>
             {inboxLoading && !inbox && !contacts.length ? (
               <div className={styles.smallEmpty} role="status">
@@ -497,6 +636,9 @@ export default function WhatsAppInbox({
                       <small>{messageTime(item.conversation?.lastMessageAt)}</small>
                     </span>
                     <span className={styles.contactPhone}>+{item.phone.replace(/\D/g, '')}</span>
+                    {!!item.meta?.labels.length && (
+                      <span className="crm-contact-labels">{item.meta.labels.join(' · ')}</span>
+                    )}
                     <span className={styles.contactPreview}>
                       {item.conversation?.lastMessageStatus && (
                         <Delivery status={item.conversation.lastMessageStatus} compact />
@@ -525,7 +667,9 @@ export default function WhatsAppInbox({
             {lastSynced ? `Updated ${messageTime(lastSynced)}` : 'Private to your workspace'}
           </div>
         </aside>
-        <div className={styles.conversationPane}>
+        <div
+          className={`${styles.conversationPane} ${team && activeContact ? 'crm-chat-with-tools' : ''}`}
+        >
           {selected && (activeContact || detailLoading || detailError) ? (
             <>
               <header className={styles.chatHeader}>
@@ -564,6 +708,16 @@ export default function WhatsAppInbox({
                   </a>
                 )}
               </header>
+              {team && activeContact && (
+                <TeamConversationTools
+                  key={(workspace || ownUid) + ':' + selected}
+                  workspace={workspace}
+                  customerId={activeContact.id}
+                  context={team}
+                  onQuickReply={setText}
+                  onChanged={() => void refreshInbox(true)}
+                />
+              )}
               <div
                 className={styles.messages}
                 ref={scrollArea}
@@ -673,8 +827,15 @@ export default function WhatsAppInbox({
                   <div className={styles.replyNote} id="whatsapp-reply-requirement" role="status">
                     <Clock3 size={15} />
                     <span>
-                      <strong>{replyBlock?.title || 'API reply unavailable'}</strong>
-                      {replyBlock?.message || 'Refresh this conversation before sending a reply.'}
+                      <strong>
+                        {!canWrite
+                          ? 'Read-only team access'
+                          : replyBlock?.title || 'API reply unavailable'}
+                      </strong>
+                      {!canWrite
+                        ? 'Your role can view conversations. Ask the workspace owner for staff access to send replies or add notes.'
+                        : replyBlock?.message ||
+                          'Refresh this conversation before sending a reply.'}
                     </span>
                   </div>
                 )}
@@ -685,14 +846,16 @@ export default function WhatsAppInbox({
                       !canReply && !detailLoading ? 'whatsapp-reply-requirement' : undefined
                     }
                     placeholder={
-                      canReply
-                        ? 'Type an API reply…'
-                        : 'Draft a message for the WhatsApp app (API reply unavailable)…'
+                      !canWrite
+                        ? 'Read-only team access'
+                        : canReply
+                          ? 'Type an API reply…'
+                          : 'Draft a message for the WhatsApp app (API reply unavailable)…'
                     }
                     value={text}
                     maxLength={4096}
                     rows={2}
-                    disabled={sending}
+                    disabled={sending || !canWrite}
                     onChange={(event) => {
                       setText(event.target.value);
                       setSendError('');
@@ -719,7 +882,7 @@ export default function WhatsAppInbox({
                     {sending ? <LoaderCircle className="spin" size={20} /> : <Send size={20} />}
                   </button>
                 </div>
-                {!canReply && activeContact && text.trim() && (
+                {canWrite && !canReply && activeContact && text.trim() && (
                   <a
                     className={`button secondary small-button ${styles.manualDraft}`}
                     href={chatLink(activeContact.phone, text.trim())}

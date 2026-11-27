@@ -53,6 +53,9 @@ import { handleAccountChat } from '@/lib/account-chat-api';
 import { accountEnvironment } from '@/lib/server/account-environment';
 import { handleAccountCustomers } from '@/lib/account-customers-api';
 import { handleEmbeddedSignup } from '@/lib/embedded-signup-api';
+import { handleTeam } from '@/lib/team-api';
+import { handleTemplateManager } from '@/lib/template-manager-api';
+import { handleConnectionHealth } from '@/lib/connection-health-api';
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
@@ -105,6 +108,11 @@ export async function GET(request: NextRequest, context: Context) {
   try {
     const p = (await context.params).path;
     const key = p.join('/');
+    if (p[0] === 'account' && p[1] === 'team') return handleTeam(request, accountEnvironment(true));
+    if (p[0] === 'account' && p[1] === 'templates')
+      return handleTemplateManager(request, accountEnvironment(true));
+    if (p[0] === 'account' && p[1] === 'connection-health')
+      return handleConnectionHealth(request, accountEnvironment(true));
     if (p[0] === 'whatsapp' && p[1] === 'embedded-signup')
       return handleEmbeddedSignup(request, accountEnvironment(true));
     if (p[0] === 'account' && p[1] === 'banners') return accountBannerRequest(request);
@@ -220,6 +228,11 @@ export async function POST(request: NextRequest, context: Context) {
   try {
     const p = (await context.params).path;
     const key = p.join('/');
+    if (p[0] === 'account' && p[1] === 'team') return handleTeam(request, accountEnvironment(true));
+    if (p[0] === 'account' && p[1] === 'templates')
+      return handleTemplateManager(request, accountEnvironment(true));
+    if (p[0] === 'account' && p[1] === 'connection-health')
+      return handleConnectionHealth(request, accountEnvironment(true));
     if (p[0] === 'whatsapp' && p[1] === 'embedded-signup')
       return handleEmbeddedSignup(request, accountEnvironment(true));
     if (p[0] === 'account' && p[1] === 'banners') return accountBannerRequest(request);

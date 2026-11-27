@@ -8,6 +8,8 @@ import {
   type EncryptedConnection,
 } from './whatsapp-connection';
 import { getServiceAccessToken } from './google-service-account';
+import { inboxAccess } from './team-access';
+import { conversationMeta } from './team-api';
 import type {
   ChatConversation,
   ChatDetailResponse,
@@ -317,7 +319,12 @@ export async function verifyUser(request: Request, env: ChatEnvironment, send: t
     throw new ChatError(401, 'Your sign-in expired. Please sign in again.');
   if (!user.emailVerified)
     throw new ChatError(403, 'Use a verified Google account to open the inbox.');
-  return { uid: user.localId as string, token };
+  return {
+    uid: user.localId as string,
+    token,
+    email: String(user.email || '').toLowerCase(),
+    name: String(user.displayName || user.email || 'Team member').slice(0, 120),
+  };
 }
 export async function readChatBody(
   request: Request,
@@ -361,19 +368,34 @@ export async function handleAccountChat(
       return chatJson({ error: 'Method not allowed' }, 405);
     if (request.method === 'POST' && !allowedRequestOrigin(request, env.appOrigin))
       throw new ChatError(403, 'Request origin is not allowed');
-    const { uid, token } = await verifyUser(request, env, send);
-    const store = await ChatStore.open(env, uid, send, token);
+    const identity = await verifyUser(request, env, send);
+    const { store, role, canWrite } = await inboxAccess(request, env, send, identity);
+    const uid = store.uid;
+    if (request.method === 'POST' && !canWrite)
+      throw new ChatError(403, 'This team role has read-only access.');
     const connection = await readChatConnection(store);
     const webhookStatus = env.serviceAccountJson ? await store.read('inboxStatus/webhook') : null;
     const configuration = inboxConfiguration(env, connection, uid, webhookStatus?.data || null);
     const path = new URL(request.url).pathname.replace(/\/$/, '');
     if (path === '/api/account/inbox' && request.method === 'GET') {
       const listed = await store.list('conversations', 'lastMessageAt desc', 500);
+      const metadata = env.serviceAccountJson
+        ? await store.list('conversationMeta', 'updatedAt desc', 500)
+        : null;
       const result: ChatInboxResponse = {
         ...configuration,
-        conversations: listed.docs.map((doc) =>
-          conversationFrom(doc.data, doc.name.split('/').pop()!),
+        workspaceId: uid,
+        role,
+        canWrite,
+        metadata: Object.fromEntries(
+          (metadata?.docs || []).map((d) => [d.name.split('/').pop(), conversationMeta(d.data)]),
         ),
+        conversations: listed.docs.map((doc) => ({
+          ...conversationFrom(doc.data, doc.name.split('/').pop()!),
+          ...conversationMeta(
+            metadata?.docs.find((m) => m.name.split('/').pop() === doc.name.split('/').pop())?.data,
+          ),
+        })),
         truncated: listed.truncated,
       };
       return chatJson(result);
@@ -398,6 +420,9 @@ export async function handleAccountChat(
       const windowOpen = matchingSender && chatWindowOpen(conversation.lastInboundAt);
       const result: ChatDetailResponse = {
         ...configuration,
+        workspaceId: uid,
+        role,
+        canWrite,
         conversation,
         messages: listed.docs
           .map((doc) => messageFrom(doc.data, doc.name.split('/').pop()!))

@@ -1,6 +1,6 @@
 # Baunthiyal Path Lab — Complete Source
 
-Source snapshot updated on 14 November 2026. Branding: **Baunthiyal Path Lab — Your Health, Our Priority**.
+Source snapshot updated on 27 November 2026. Branding: **Baunthiyal Path Lab — Your Health, Our Priority**.
 
 ## Projects
 
@@ -13,6 +13,8 @@ Source snapshot updated on 14 November 2026. Branding: **Baunthiyal Path Lab —
 The hosted portal corresponds to source commit `ae90432f52c08d6596632c9c5af5458a6ba9cdee`. The callback corresponds to `2e5516a15b0eb6204868a61b8ed615eb04e323ec`.
 
 ## Current operating state
+
+- The existing Render app now includes Template Manager (drafts, real Meta submission/image upload/status refresh), persistent connection alerts with dashboard checks, and an invitation-based Team Inbox with roles, assignment, labels, notes and quick replies. See [`nextjs-app/docs/CRM_MODULES.md`](nextjs-app/docs/CRM_MODULES.md) for behavior and validation. These modules use real account-scoped records; provider operations require valid Meta credentials. No paid service or message campaign is automatically started.
 
 - Public privacy policy, terms, data deletion instructions and contact pages are available on the Render app; see `nextjs-app/docs/META_PUBLIC_PAGES.md` for the exact Meta settings URLs.
 - Campaign banners can be optimized and saved in the signed-in user's Firestore workspace, with image previews preserved across wizard steps. This does not require a paid Storage bucket.

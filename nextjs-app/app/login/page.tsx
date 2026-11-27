@@ -38,6 +38,18 @@ export default function Login() {
       await signOut(auth);
       throw error;
     }
+    const returnTo = new URLSearchParams(window.location.search).get('returnTo');
+    if (returnTo && returnTo.length <= 2048) {
+      try {
+        const target = new URL(returnTo, window.location.origin);
+        if (target.origin === window.location.origin && target.pathname === '/team-invite') {
+          window.location.assign(target.pathname + target.search);
+          return;
+        }
+      } catch {
+        /* Invalid return paths fall back to the dashboard. */
+      }
+    }
     window.location.assign('/');
   }
   return (
