@@ -54,6 +54,7 @@ import WhatsAppConnectionOptions from './whatsapp-connection-options';
 import PublicHome from './public-home';
 import TestCatalog from './test-catalog';
 import WhatsAppInbox from './whatsapp-inbox';
+import LinkedCampaignForm from './linked-campaign-form';
 import TemplateManager from './template-manager';
 import { FileText } from 'lucide-react';
 import TeamSettings from './team-settings';
@@ -1376,7 +1377,18 @@ export default function Dashboard() {
           <LoaderCircle className="spin" size={17} />
         </div>
       )}
-      {modal === 'campaign' && (
+      {modal === 'campaign' && !selected && whatsappProvider === 'personal' && (
+        <LinkedCampaignForm
+          offers={data.offers}
+          serverWorkspace={ready}
+          onClose={() => setModal(null)}
+          onOpenAudience={() => {
+            setModal(null);
+            navigate('audience');
+          }}
+        />
+      )}
+      {modal === 'campaign' && (selected || whatsappProvider !== 'personal') && (
         <CampaignForm
           existing={selected}
           data={data}
