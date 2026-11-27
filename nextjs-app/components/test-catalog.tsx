@@ -20,6 +20,12 @@ import { money } from '@/lib/brand';
 import { accountApi, Field, Modal, Notice, Submit } from './ui';
 import styles from './test-catalog.module.css';
 
+type RatePreview = {
+  covered: number;
+  eligible: number;
+  asOf: string;
+  rows: { id: string; name: string; rupees: number; source: string; publishedName: string }[];
+};
 type Props = {
   tests: CatalogEntry[];
   totalTests: number;
@@ -52,6 +58,36 @@ export default function TestCatalog({
   const [notice, setNotice] = useState('');
   const [localError, setLocalError] = useState('');
   const [editing, setEditing] = useState<CatalogEntry | null>(null);
+  const [rates, setRates] = useState<RatePreview | null>(null);
+  const [rateBusy, setRateBusy] = useState(false);
+  async function previewRates() {
+    setRateBusy(true);
+    setLocalError('');
+    try {
+      setRates(await accountApi<RatePreview>('account/catalog/reference-rates'));
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : 'Could not load reference rates.');
+    } finally {
+      setRateBusy(false);
+    }
+  }
+  async function saveRates() {
+    setRateBusy(true);
+    setLocalError('');
+    try {
+      const result = await accountApi<{ updated: number }>('account/catalog/reference-rates', {
+        confirm: true,
+      });
+      setRates(null);
+      setNotice(`Saved ${result.updated} published reference rates. Existing rates were kept.`);
+      await onChanged();
+    } catch (error) {
+      setRates(null);
+      setLocalError(error instanceof Error ? error.message : 'Could not confirm the rate update.');
+    } finally {
+      setRateBusy(false);
+    }
+  }
   const categories = useMemo(
     () => [...new Set(tests.map((test) => test.category || 'General'))].sort(),
     [tests],
@@ -118,6 +154,68 @@ export default function TestCatalog({
 
   return (
     <div className={styles.catalog}>
+      {rates && (
+        <Modal
+          title="Published reference rates"
+          onClose={() => {
+            if (!rateBusy) setRates(null);
+          }}
+        >
+          <div className="modal-body">
+            <p>
+              {rates.eligible} pending tests can be priced from public laboratory rate lists checked{' '}
+              {rates.asOf}. Existing rates will not change.
+            </p>
+            <p>
+              These are other providers’ prices, not this lab’s quotes. Review them before using
+              them in any offer.
+            </p>
+            <div style={{ maxHeight: '42vh', overflow: 'auto' }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Test</th>
+                    <th>Rate</th>
+                    <th>Published listing</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rates.rows.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.name}</td>
+                      <td>₹{row.rupees.toLocaleString('en-IN')}</td>
+                      <td>
+                        <a href={row.source} target="_blank" rel="noreferrer">
+                          {row.publishedName}
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div className="modal-footer">
+            <button
+              type="button"
+              className="button secondary"
+              disabled={rateBusy}
+              onClick={() => setRates(null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="button primary"
+              disabled={rateBusy || !rates.eligible}
+              onClick={() => void saveRates()}
+            >
+              {rateBusy ? 'Saving reference rates…' : 'Apply reference rates'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
       <div className={styles.summary}>
         <div className={styles.summaryItem}>
           <span className={styles.summaryIcon}>
@@ -177,6 +275,16 @@ export default function TestCatalog({
               >
                 {importing ? <LoaderCircle size={14} className="spin" /> : <Download size={14} />}
                 {importing ? 'Adding tests…' : 'Add reference tests'}
+              </button>
+            )}
+            {accountMode && (
+              <button
+                type="button"
+                className="button secondary small-button"
+                disabled={busy || rateBusy}
+                onClick={() => void previewRates()}
+              >
+                <IndianRupee size={14} /> Review reference rates
               </button>
             )}
             <button type="button" className="button primary small-button" onClick={onAdd}>

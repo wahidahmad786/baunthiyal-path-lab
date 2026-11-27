@@ -162,3 +162,75 @@ test('reference import adds only missing records at null rates and preserves exi
   assert.equal(result.skipped, REFERENCE_TESTS.length);
   assert.equal(writeCount, 1);
 });
+
+test('published benchmark rates cover the pending reference catalog without invented IDs', async () => {
+  const { REFERENCE_RATE_ROWS } = await import('../lib/reference-rates');
+  const withoutBenchmarks = new Set(['BPL-REF-0136', 'BPL-REF-0438', 'BPL-REF-0439']);
+  assert.deepEqual(
+    new Set(REFERENCE_RATE_ROWS.map((row) => row.id)),
+    new Set(REFERENCE_TESTS.filter((row) => !withoutBenchmarks.has(row.id)).map((row) => row.id)),
+  );
+  assert.equal(REFERENCE_RATE_ROWS.length, 436);
+  for (const row of REFERENCE_RATE_ROWS) {
+    assert.ok(Number.isSafeInteger(row.rupees) && row.rupees > 0);
+    assert.equal(new URL(row.source).protocol, 'https:');
+  }
+});
+
+test('reference rate preview is read-only and apply protects existing prices and catalog fields', async () => {
+  let writes: any[] = [];
+  let conflict = true;
+  let saved = false;
+  const send = (async (input, init) => {
+    const url = String(input);
+    if (url.includes('accounts:lookup'))
+      return Response.json({ users: [{ localId: 'catalog-owner', emailVerified: true }] });
+    const body = JSON.parse(String(init?.body));
+    if (url.endsWith(':batchGet')) {
+      assert.equal(body.documents.length, 436);
+      assert.ok(body.documents.every((name: string) => name.includes('/catalog-owner/tests/')));
+      return Response.json(
+        body.documents.slice(0, 4).map((name: string, i: number) => ({
+          found: {
+            name,
+            updateTime: '2026-11-25T00:00:00Z',
+            fields: {
+              ownerId: { stringValue: i === 3 ? 'other' : 'catalog-owner' },
+              id: { stringValue: REFERENCE_TESTS[i].id },
+              type: { stringValue: 'test' },
+              name: { stringValue: i === 2 ? 'Changed test identity' : REFERENCE_TESTS[i].name },
+              price: i === 1 || (i === 0 && saved) ? { integerValue: '100' } : { nullValue: null },
+            },
+          },
+        })),
+      );
+    }
+    assert.ok(url.endsWith(':commit'));
+    if (conflict) return Response.json({ error: 'precondition failed' }, { status: 409 });
+    writes = body.writes;
+    saved = true;
+    return Response.json({ writeResults: writes.map(() => ({})) });
+  }) as typeof fetch;
+  const path = '/catalog/reference-rates';
+  const preview = await handleAccountCatalog(request(path), env, send);
+  assert.equal((await preview.json()).eligible, 1);
+  assert.equal(writes.length, 0);
+  assert.equal((await handleAccountCatalog(request(path, {}), env, send)).status, 400);
+  assert.equal(
+    (await handleAccountCatalog(request(path, { confirm: true }), env, send)).status,
+    409,
+  );
+  assert.equal(writes.length, 0);
+  conflict = false;
+  const result = await handleAccountCatalog(request(path, { confirm: true }), env, send);
+  assert.equal((await result.json()).updated, 1);
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].update.fields.price, { integerValue: '28000' });
+  assert.deepEqual(writes[0].updateMask.fieldPaths, ['price', 'updatedAt']);
+  assert.equal(writes[0].currentDocument.updateTime, '2026-11-25T00:00:00Z');
+  assert.equal(
+    (await (await handleAccountCatalog(request(path, { confirm: true }), env, send)).json())
+      .updated,
+    0,
+  );
+});

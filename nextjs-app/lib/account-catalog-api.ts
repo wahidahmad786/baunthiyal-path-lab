@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { offerSchema, finalPrice, type Offer } from './domain';
 import { REFERENCE_TESTS } from './test-reference';
+import { REFERENCE_RATE_ROWS, REFERENCE_RATE_DATE } from './reference-rates';
 import { allowedRequestOrigin } from './request-origin';
 
 export type AccountCatalogEnvironment = {
@@ -260,6 +261,78 @@ export async function handleAccountCatalog(
         offersTruncated: offers.truncated,
         limits: { tests: 1000, offers: 200 },
       });
+    }
+    if (path === '/api/account/catalog/reference-rates') {
+      if (request.method === 'POST') {
+        const body = z
+          .object({ confirm: z.literal(true) })
+          .strict()
+          .safeParse(await readJson(request));
+        if (!body.success)
+          throw new CatalogError(400, 'Confirm applying published benchmark rates.');
+      }
+      const catalog = new Map(REFERENCE_TESTS.map((row) => [row.id, row]));
+      const rows = REFERENCE_RATE_ROWS;
+      const docs = await batchGet(rows.map((row) => row.id));
+      const eligible = rows.filter((row) => {
+        const doc = docs.get(row.id);
+        return (
+          !!doc?.updateTime &&
+          doc.fields.ownerId?.stringValue === uid &&
+          doc.fields.type?.stringValue === 'test' &&
+          doc.fields.id?.stringValue === row.id &&
+          doc.fields.name?.stringValue === catalog.get(row.id)?.name &&
+          !!doc.fields.price &&
+          'nullValue' in doc.fields.price
+        );
+      });
+      const summary = {
+        covered: rows.length,
+        eligible: eligible.length,
+        asOf: REFERENCE_RATE_DATE,
+      };
+      if (request.method === 'GET')
+        return json({
+          ...summary,
+          rows: eligible.map(({ id, rupees, source, publishedName }) => ({
+            id,
+            name: catalog.get(id)!.name,
+            rupees,
+            source,
+            publishedName,
+          })),
+        });
+      if (!eligible.length) return json({ ...summary, updated: 0 });
+      if (eligible.length > 450)
+        throw new CatalogError(503, 'Reference rate set exceeds the batch limit.');
+      const timestamp = new Date().toISOString();
+      const writes = eligible.map((row) => ({
+        update: {
+          name: `${nameParent}/tests/${row.id}`,
+          fields: { price: numeric(row.rupees * 100), updatedAt: { timestampValue: timestamp } },
+        },
+        updateMask: { fieldPaths: ['price', 'updatedAt'] },
+        currentDocument: { updateTime: docs.get(row.id)!.updateTime },
+      }));
+      const response = await commit(writes);
+      if (!response.ok) {
+        if ([409, 412].includes(response.status))
+          throw new CatalogError(
+            409,
+            'A catalog value changed. Refresh the review and try again; no rates were written.',
+          );
+        throw new CatalogError(
+          503,
+          'Could not confirm the rate update. Refresh the catalog before retrying.',
+        );
+      }
+      const results = await response.json();
+      if (!Array.isArray(results.writeResults) || results.writeResults.length !== eligible.length)
+        throw new CatalogError(
+          503,
+          'Could not confirm every rate. Refresh the catalog before retrying.',
+        );
+      return json({ ...summary, updated: eligible.length });
     }
     if (request.method === 'POST' && path === '/api/account/catalog/import-reference') {
       const parsed = z
