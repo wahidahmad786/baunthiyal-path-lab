@@ -228,8 +228,8 @@ export default function WhatsAppConnectionOptions({
               <img
                 src={personal.qr}
                 alt="Scan this WhatsApp linking QR code using your own phone"
-                width={280}
-                height={280}
+                width={360}
+                height={360}
               />
               <p>WhatsApp → Settings → Linked devices → Link a device</p>
             </div>

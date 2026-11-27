@@ -242,7 +242,10 @@ async function connectSocket(session: Session) {
     enqueue(session, async () => {
       if (session.stopped || session.socket !== socket) return;
       if (update.qr) {
-        session.state.qr = await QRCode.toDataURL(update.qr, { width: 280, margin: 2 });
+        session.state.qr = await QRCode.toDataURL(update.qr, {
+          width: 360,
+          margin: 4,
+        });
         session.state.status = 'qr';
         session.state.message = 'On your phone open WhatsApp → Linked devices → Link a device.';
         if (session.pairingPhone && !session.pairingRequested && !session.creds.registered) {
