@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { MessageSquareText, Save } from 'lucide-react';
+import { EllipsisVertical, MessageSquareText, Save } from 'lucide-react';
 import { accountApi, Notice } from './ui';
 import type { ConversationMeta, ConversationNote, TeamContext } from '@/lib/crm-types';
 export const workspacePath = (path: string, workspace: string) =>
@@ -9,12 +9,14 @@ export default function TeamConversationTools({
   workspace,
   customerId,
   context,
+  compact = false,
   onQuickReply,
   onChanged,
 }: {
   workspace: string;
   customerId: string;
   context: TeamContext;
+  compact?: boolean;
   onQuickReply: (text: string) => void;
   onChanged: () => void;
 }) {
@@ -82,10 +84,21 @@ export default function TeamConversationTools({
     }
   }
   return (
-    <details className="crm-conversation-tools">
-      <summary>
-        <MessageSquareText size={15} />
-        Assignment, labels & internal notes {meta.status === 'resolved' ? '· Resolved' : ''}
+    <details
+      className={'crm-conversation-tools' + (compact ? ' crm-conversation-tools-compact' : '')}
+    >
+      <summary
+        aria-label={compact ? 'Conversation tools' : undefined}
+        title={compact ? 'Conversation tools' : undefined}
+      >
+        {compact ? (
+          <EllipsisVertical size={21} />
+        ) : (
+          <>
+            <MessageSquareText size={15} />
+            Assignment, labels & internal notes {meta.status === 'resolved' ? '· Resolved' : ''}
+          </>
+        )}
       </summary>
       <div className="crm-thread-tools-body">
         {error && <Notice error>{error}</Notice>}

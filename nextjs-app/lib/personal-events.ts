@@ -6,6 +6,7 @@ import {
   conversationFrom,
   nextChatStatus,
 } from './account-chat-api';
+import type { PersonalImage } from './personal-image';
 import type { ChatMessageStatus } from './chat-types';
 export function personalPhone(jid?: string | null) {
   if (!jid || !/^\d+(?::\d+)?@s\.whatsapp\.net$/.test(jid)) return null;
@@ -25,6 +26,8 @@ export async function recordPersonalMessage(
     at: string;
     status: ChatMessageStatus;
     allowOptOut?: boolean;
+    isPhoto?: boolean;
+    image?: PersonalImage;
   },
 ) {
   const id = (await chatHash(event.phone)).slice(0, 32);
@@ -67,8 +70,12 @@ export async function recordPersonalMessage(
           provider: 'personal',
           personalId: event.providerId,
           direction: event.outbound ? 'outbound' : 'inbound',
-          type: 'text',
-          text: event.text.slice(0, 4096),
+          type: event.isPhoto || message?.data.type === 'image' ? 'image' : 'text',
+          imageAvailable: event.image ? true : message?.data.imageAvailable === true || undefined,
+          text: (!event.isPhoto && message?.data.type === 'image'
+            ? String(message.data.text || '')
+            : event.text
+          ).slice(0, 4096),
           createdAt: message?.data.createdAt || event.at,
           status,
         },
@@ -82,7 +89,7 @@ export async function recordPersonalMessage(
           provider: 'personal',
           ...(isLatest
             ? {
-                lastMessagePreview: event.text.slice(0, 240),
+                lastMessagePreview: (event.text || (event.isPhoto ? 'Photo' : '')).slice(0, 240),
                 lastMessageAt: event.at,
                 lastMessageStatus: status,
               }
@@ -95,8 +102,22 @@ export async function recordPersonalMessage(
         conversation,
       ),
     ];
+    if (event.image)
+      writes.push(
+        store.write(
+          `personalMessageImages/${messageId}`,
+          sealPersonal(
+            JSON.stringify(event.image),
+            store.uid,
+            `image:${id}:${messageId}`,
+            store.env.encryptionKey,
+          ),
+          undefined,
+        ),
+      );
     if (
       !message &&
+      !event.isPhoto &&
       !event.outbound &&
       event.allowOptOut &&
       /^STOP$/i.test(event.text.trim()) &&

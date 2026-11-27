@@ -2,6 +2,8 @@ import { readPersonalHistory, personalHistoryStatus } from './personal-history';
 import { providerDocument } from './whatsapp-provider';
 import { personalStatus, sendPersonal, requestPersonalHistory } from './personal-whatsapp';
 import { personalMessageId } from './personal-events';
+import { openPersonal } from './personal-auth';
+import { personalImageBytes, type PersonalImage } from './personal-image';
 import { z } from 'zod';
 import { normalizePhone } from './domain';
 import { allowedRequestOrigin } from './request-origin';
@@ -287,6 +289,7 @@ export function messageFrom(record: Record<string, any>, id: string): ChatMessag
     ...(record.metaId ? { metaId: record.metaId } : {}),
     direction: record.direction,
     type: record.type || 'text',
+    ...(record.type === 'image' && record.imageAvailable === true ? { imageAvailable: true } : {}),
     text: String(record.text || ''),
     status: record.status,
     createdAt: new Date(record.createdAt).toISOString(),
@@ -416,6 +419,41 @@ export async function handleAccountChat(
       throw new ChatError(403, 'This team role has read-only access.');
     const binding = env.serviceAccountJson ? await providerDocument(store) : null;
     const personal = binding?.data.mode === 'personal';
+    const path = new URL(request.url).pathname.replace(/\/$/, '');
+    const imageMatch = path.match(
+      /^\/api\/account\/inbox\/([a-f0-9]{32})\/messages\/(personal-[a-f0-9]{64})\/image$/,
+    );
+    if (request.method === 'GET' && imageMatch) {
+      if (!personal) throw new ChatError(404, 'Photo unavailable.');
+      const [, chatId, messageId] = imageMatch;
+      const saved = await store.read(`personalMessageImages/${messageId}`);
+      let image: PersonalImage | undefined;
+      if (saved) {
+        try {
+          image = JSON.parse(
+            openPersonal(saved.data, uid, `image:${chatId}:${messageId}`, env.encryptionKey),
+          );
+        } catch {
+          // A photo saved to a different conversation must not be accessible here.
+        }
+      }
+      if (!image) {
+        const history = await readPersonalHistory(store, chatId);
+        image = history.messages.find(
+          (m) => m.id === messageId && m.type === 'image',
+        )?.personalImage;
+      }
+      const result = image && (await personalImageBytes(image, send, request.signal));
+      if (!result) throw new ChatError(404, 'Photo unavailable.');
+      return new Response(new Uint8Array(result.bytes), {
+        headers: {
+          'Content-Type': result.mime,
+          'Cache-Control': 'private, no-store',
+          'X-Content-Type-Options': 'nosniff',
+          'Cross-Origin-Resource-Policy': 'same-origin',
+        },
+      });
+    }
     const personalState = personal ? await personalStatus(store) : null;
     const connection = personal ? null : await readChatConnection(store);
     const webhookStatus =
@@ -443,7 +481,6 @@ export async function handleAccountChat(
           provider: 'meta' as const,
           ...inboxConfiguration(env, connection, uid, webhookStatus?.data || null),
         };
-    const path = new URL(request.url).pathname.replace(/\/$/, '');
     if (path === '/api/account/inbox/sync' && request.method === 'POST') {
       if (!personal)
         throw new ChatError(409, 'Phone chat sync is available for linked WhatsApp accounts.');
@@ -609,11 +646,22 @@ export async function handleAccountChat(
       const history = personal
         ? await readPersonalHistory(store, id)
         : { messages: [], clipped: false };
-      const merged = new Map<string, ChatMessage>(history.messages.map((m) => [m.id, m]));
+      const merged = new Map<string, ChatMessage>(
+        history.messages.map(({ personalId: _personalId, personalImage, ...m }) => [
+          m.id,
+          { ...m, ...(personalImage ? { imageAvailable: true } : {}) },
+        ]),
+      );
       for (const doc of listed.docs) {
         const m = messageFrom(doc.data, doc.name.split('/').pop()!);
         const old = merged.get(m.id);
-        merged.set(m.id, { ...m, status: old ? nextChatStatus(old.status, m.status) : m.status });
+        merged.set(m.id, {
+          ...(old?.type === 'image' && m.type !== 'image'
+            ? { ...m, type: old.type, text: old.text }
+            : m),
+          ...(old?.imageAvailable || m.imageAvailable ? { imageAvailable: true } : {}),
+          status: old ? nextChatStatus(old.status, m.status) : m.status,
+        });
       }
       const sorted = [...merged.values()]
         .filter(

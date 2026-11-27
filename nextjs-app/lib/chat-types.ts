@@ -4,7 +4,8 @@ export type ChatMessage = {
   id: string;
   metaId?: string;
   direction: 'inbound' | 'outbound';
-  type: 'text' | 'template' | 'unsupported';
+  type: 'text' | 'template' | 'unsupported' | 'image';
+  imageAvailable?: boolean;
   text: string;
   status: ChatMessageStatus;
   createdAt: string;

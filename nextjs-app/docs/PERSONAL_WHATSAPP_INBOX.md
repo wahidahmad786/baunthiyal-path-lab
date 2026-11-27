@@ -4,9 +4,9 @@ Connecting a personal/mobile WhatsApp device now opens an inbox that can receive
 
 ## User flow
 
-After a new QR/pairing connection succeeds, the portal opens WhatsApp Inbox. Chats and names arrive from WhatsApp's history events; the UI displays actual sync progress. Existing linked devices created before history support request a phone sync when their saved socket reconnects.
+After a new QR/pairing connection succeeds, the portal opens WhatsApp Inbox. Chats and names arrive from WhatsApp's history events; the Inbox shows progress only when a sync is active or needs attention; connection details stay in WhatsApp Integration. Existing linked devices created before history support request a phone sync when their saved socket reconnects.
 
-Use **Sync chats** while the phone is online to request history again. The request uses the protocol's full-history-on-demand operation directed at the user's own primary phone. Acceptance of this request is shown as requested, never as an invented completed import. The phone can decline it or not support it, especially for non-Business primary accounts. In that case use WhatsApp Integration → **Chat history did not arrive? → Re-link this device for chat history** and approve the same number again. Re-linking is an explicit owner action; it does not delete portal conversations or switch the account's connection method.
+Use the **Sync chats** button above the chat list while the phone is online to request history again. The request uses the protocol's full-history-on-demand operation directed at the user's own primary phone. Acceptance of this request is shown as requested, never as an invented completed import. The phone can decline it or not support it, especially for non-Business primary accounts. In that case use WhatsApp Integration → **Chat history did not arrive? → Re-link this device for chat history** and approve the same number again. Re-linking is an explicit owner action; it does not delete portal conversations or switch the account's connection method.
 
 Use **+ / New WhatsApp chat** to choose a synced phone contact or enter a number with country code. Opening the conversation does not send anything or register a marketing customer. Type a message and choose send; the backend records its request ID before contacting WhatsApp, and duplicate submissions do not send again. Delivery ticks follow actual provider status. Phone history messages without a receipt stay unconfirmed.
 
@@ -18,7 +18,7 @@ The API merges saved history with real portal/live messages, deduplicates provid
 
 The synced history is visible to the workspace owner and the team members they authorize. Only the owner may request full phone sync or re-link. Staff can use the shared inbox and open individual chats; viewers cannot send, start chats or request sync. Direct Firebase client reads of private history remain denied. Revocation is checked on every shared request.
 
-Attachments appear as type/caption labels; this change does not implement full WhatsApp media downloads, calls, status, channels or group conversations. View-once contents and already expired disappearing messages are not copied from history.
+Ordinary photos display inside message bubbles when WhatsApp supplies retrievable media. If an original expired, an available embedded thumbnail may display instead. Earlier label-only messages can gain photo data on **Sync chats**, but only if the phone still shares the necessary data. Other attachments remain type/caption labels. View-once and disappearing photos are not imported as images. Contact avatars use the owner's linked session and respect WhatsApp visibility; initials or a default icon show if no preview is available. Calls, status, channels and group conversations are not part of this inbox.
 
 History processing runs separately from the live message queue and publishes incremental progress. A history failure does not deliberately close a healthy socket. Five-second polling uses private revision checks, avoiding a complete re-read of all unchanged chats/messages on every refresh. Metadata changes invalidate the listing as well.
 

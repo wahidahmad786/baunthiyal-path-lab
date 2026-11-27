@@ -7,8 +7,9 @@ import {
   Check,
   CheckCheck,
   Clock3,
-  Copy,
   ExternalLink,
+  ImageIcon,
+  ListFilter,
   LoaderCircle,
   MessageCircle,
   Plus,
@@ -46,7 +47,7 @@ type Contact = {
 type Props = {
   customers: Customer[];
   selectedCustomerId?: string | null;
-  onSelect?: (id: string) => void;
+  onSelect?: (id: string | null) => void;
   onOpenIntegration?: () => void;
   initialWorkspaceId?: string;
 };
@@ -88,6 +89,7 @@ function messageDay(value: string) {
 }
 function initials(name: string) {
   return name
+    .replace(/^\+?[\d\s()-]+$/, '')
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
@@ -95,11 +97,137 @@ function initials(name: string) {
     .join('')
     .toUpperCase();
 }
+const photoRequests: (() => void)[] = [];
+let activePhotoRequests = 0;
+function runPhotoRequests() {
+  while (activePhotoRequests < 3 && photoRequests.length) {
+    activePhotoRequests++;
+    photoRequests.shift()?.();
+  }
+}
+function schedulePhoto(request: AbortSignal, load: () => Promise<void>) {
+  const queued = () => {
+    void Promise.resolve()
+      .then(() => {
+        if (!request.aborted) return load();
+      })
+      .finally(() => {
+        activePhotoRequests--;
+        runPhotoRequests();
+      });
+  };
+  photoRequests.push(queued);
+  runPhotoRequests();
+  const cancelQueued = () => {
+    const pending = photoRequests.indexOf(queued);
+    if (pending !== -1) photoRequests.splice(pending, 1);
+  };
+  request.addEventListener('abort', cancelQueued, { once: true });
+}
+function usePrivateImage(path?: string) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const [result, setResult] = useState<{ path: string; url?: string } | null>(null);
+  useEffect(() => {
+    const element = anchor.current;
+    if (!path || !element) return;
+    const request = new AbortController();
+    let observer: IntersectionObserver | undefined;
+    let url: string | undefined;
+    const load = async () => {
+      try {
+        const user = labClientAuth().currentUser;
+        if (!user) throw new Error('Sign in required');
+        const token = await user.getIdToken();
+        const response = await fetch(path, {
+          headers: { Authorization: 'Bearer ' + token },
+          cache: 'no-store',
+          signal: request.signal,
+        });
+        if (
+          !response.ok ||
+          !/^image\/(?:jpeg|png|webp|gif|avif)(?:;|$)/i.test(
+            response.headers.get('Content-Type') || '',
+          )
+        )
+          throw new Error('Photo unavailable');
+        const blob = await response.blob();
+        if (request.signal.aborted) return;
+        url = URL.createObjectURL(blob);
+        setResult({ path, url });
+      } catch {
+        if (!request.signal.aborted) setResult({ path });
+      }
+    };
+    let scheduled = false;
+    const start = () => {
+      if (scheduled || request.signal.aborted) return;
+      scheduled = true;
+      observer?.disconnect();
+      schedulePhoto(request.signal, load);
+    };
+    if (typeof IntersectionObserver === 'undefined') start();
+    else {
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) start();
+        },
+        { rootMargin: '32px' },
+      );
+      observer.observe(element);
+    }
+    return () => {
+      observer?.disconnect();
+      request.abort();
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [path]);
+  return {
+    anchor,
+    url: result?.path === path ? result?.url : undefined,
+    pending: !!path && result?.path !== path,
+  };
+}
+function ChatAvatar({ name, path }: { name: string; path?: string }) {
+  const image = usePrivateImage(path);
+  const [broken, setBroken] = useState('');
+  return (
+    <span className={styles.avatar} ref={image.anchor} aria-hidden="true">
+      {image.url && image.url !== broken ? (
+        <img src={image.url} alt="" onError={() => setBroken(image.url || '')} />
+      ) : (
+        initials(name) || <MessageCircle size={18} />
+      )}
+    </span>
+  );
+}
+function ChatPhoto({ path }: { path?: string }) {
+  const image = usePrivateImage(path);
+  const [broken, setBroken] = useState('');
+  return (
+    <span className={styles.photo} ref={image.anchor}>
+      {image.url && image.url !== broken ? (
+        <a href={image.url} target="_blank" rel="noopener noreferrer" aria-label="Open full photo">
+          <img
+            src={image.url}
+            alt="WhatsApp photo"
+            decoding="async"
+            onError={() => setBroken(image.url || '')}
+          />
+        </a>
+      ) : (
+        <span className={styles.photoUnavailable}>
+          <ImageIcon size={17} />
+          {image.pending ? 'Loading photo…' : 'Photo unavailable'}
+        </span>
+      )}
+    </span>
+  );
+}
 function chatLink(phone: string, text = '') {
   const digits = phone.replace(/\D/g, '');
   return `https://wa.me/${digits}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
 }
-function Delivery({ status, compact = false }: { status: ChatMessageStatus; compact?: boolean }) {
+function Delivery({ status }: { status: ChatMessageStatus }) {
   const Icon =
     status === 'read' || status === 'delivered'
       ? CheckCheck
@@ -116,8 +244,7 @@ function Delivery({ status, compact = false }: { status: ChatMessageStatus; comp
       title={labels[status]}
       aria-label={labels[status]}
     >
-      <Icon size={compact ? 13 : 14} className={status === 'submitting' ? 'spin' : undefined} />
-      {!compact && <span>{labels[status]}</span>}
+      <Icon size={14} className={status === 'submitting' ? 'spin' : undefined} />
     </span>
   );
 }
@@ -142,6 +269,7 @@ export default function WhatsAppInbox({
   const isOwnWorkspace = !workspace || workspace === ownUid;
   const [selected, setSelected] = useState<string | null>(selectedCustomerId || null);
   const [query, setQuery] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
   const [inbox, setInbox] = useState<InboxResponse | null>(null);
   const [detail, setDetail] = useState<ConversationResponse | null>(null);
   const [inboxLoading, setInboxLoading] = useState(true);
@@ -160,8 +288,6 @@ export default function WhatsAppInbox({
   const restoreScroll = useRef<{ height: number; top: number } | null>(null);
 
   const [sendError, setSendError] = useState('');
-  const [copyMessage, setCopyMessage] = useState('');
-  const [lastSynced, setLastSynced] = useState<string | null>(null);
   const inboxRevision = useRef<string | undefined>(undefined),
     detailRevision = useRef<string | undefined>(undefined);
   const inboxRequest = useRef(0);
@@ -195,6 +321,9 @@ export default function WhatsAppInbox({
     setInbox(null);
     setDetail(null);
     setSelected(null);
+    onSelect?.(null);
+    setQuery('');
+    setShowFilters(false);
     setNewChat(false);
     setSyncError('');
     setText('');
@@ -239,7 +368,6 @@ export default function WhatsAppInbox({
             : result,
         );
         setInboxError('');
-        setLastSynced(new Date().toISOString());
       } catch (error) {
         if (request === inboxRequest.current && labClientAuth().currentUser?.uid === uid)
           setInboxError(
@@ -423,15 +551,15 @@ export default function WhatsAppInbox({
   }, [olderMessages.length]);
   const personalConnection = (detail?.provider ?? inbox?.provider) === 'personal';
   const configured = detail?.configured ?? inbox?.configured ?? false;
+  const canSync =
+    personalConnection && configured && (inbox?.role || team?.role || 'owner') === 'owner';
   const windowOpen = !!detail?.windowOpen;
   const canWrite =
     (detail?.canWrite ?? inbox?.canWrite ?? team?.canWrite) !== false &&
     (isOwnWorkspace || !!team?.canWrite);
   const canReply = canWrite && configured && windowOpen && !!activeContact && !detailError;
-  const webhookUrl = isOwnWorkspace ? detail?.webhookUrl || inbox?.webhookUrl : null;
   const reason = detail?.reason || inbox?.reason;
   const senderPhone = detail?.senderPhone || inbox?.senderPhone;
-  const testSender = detail?.testSender ?? inbox?.testSender ?? false;
   const replyBlock =
     detail?.replyBlock ||
     (!canReply
@@ -556,104 +684,24 @@ export default function WhatsAppInbox({
   function chooseContact(id: string) {
     setSelected(id);
     onSelect?.(id);
-    if (window.innerWidth <= 760)
+    if (window.matchMedia('(max-width: 690px)').matches)
       setTimeout(
         () =>
           document
-            .querySelector('[aria-label="Customer conversations"]')
-            ?.parentElement?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+            .getElementById('whatsapp-chat-pane')
+            ?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
         50,
       );
   }
 
   return (
     <section className={styles.inbox} aria-label="WhatsApp conversations">
-      <div className={styles.heading}>
-        <div>
-          <span className={styles.headingIcon}>
-            <MessageCircle size={23} />
-          </span>
-          <div>
-            <h2>WhatsApp inbox</h2>
-            <p>Conversations, replies and delivery updates in one place.</p>
-          </div>
-        </div>
-        <div className={styles.headingActions}>
-          <span>Auto-refresh · 5 sec</span>
-          <button
-            type="button"
-            className="button secondary small-button"
-            onClick={() => {
-              inboxRevision.current = undefined;
-              detailRevision.current = undefined;
-              void refreshInbox();
-              if (selected) void refreshDetail(selected, true);
-            }}
-            disabled={inboxLoading}
-          >
-            <RefreshCw size={15} className={inboxLoading ? 'spin' : undefined} />
-            Refresh
+      {inbox?.history?.phase === 'needs_relink' && onOpenIntegration && isOwnWorkspace && (
+        <div className={styles.notice} role="status">
+          <span>Chat history sync needs a fresh link.</span>
+          <button type="button" className="text-button" onClick={onOpenIntegration}>
+            Open WhatsApp Integration
           </button>
-        </div>
-      </div>
-      <div className="crm-inbox-workspace">
-        <label>
-          Inbox workspace
-          <select
-            aria-label="Inbox workspace"
-            value={workspace || ownUid}
-            onChange={(e) => changeWorkspace(e.target.value)}
-          >
-            {(
-              team?.workspaces || [{ id: ownUid, name: 'My WhatsApp workspace', role: 'owner' }]
-            ).map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name} · {w.role}
-              </option>
-            ))}
-          </select>
-        </label>
-        {team && (
-          <span className="badge muted">
-            {team.role === 'viewer' ? 'Read-only access' : 'Team access: ' + team.role}
-          </span>
-        )}
-      </div>
-      {personalConnection && (
-        <div className={styles.syncBar} role="status">
-          <div>
-            <strong>
-              {inbox?.history?.phase === 'ready' ? 'Phone chats synced' : 'WhatsApp chat sync'}
-            </strong>
-            <p>
-              {inbox?.history?.message ||
-                'Sync available chat history and contact names from your phone.'}
-            </p>
-            {inbox?.history?.progress != null && (
-              <progress
-                max={100}
-                value={inbox.history.progress}
-                aria-label="Chat history sync progress"
-              />
-            )}
-          </div>
-          {(inbox?.role || team?.role || 'owner') === 'owner' && (
-            <div className={styles.syncActions}>
-              <button
-                className="button secondary small-button"
-                disabled={syncBusy || !configured}
-                onClick={() => void syncChats()}
-              >
-                <RefreshCw size={14} className={syncBusy ? 'spin' : undefined} />
-                {syncBusy ? 'Requesting…' : 'Sync chats'}
-              </button>
-              {inbox?.history?.phase === 'needs_relink' && onOpenIntegration && isOwnWorkspace && (
-                <button className="text-button" onClick={onOpenIntegration}>
-                  Re-link for history
-                </button>
-              )}
-            </div>
-          )}
         </div>
       )}
       {syncError && (
@@ -666,46 +714,10 @@ export default function WhatsAppInbox({
           {teamError}
         </div>
       )}
-      {team?.contactsTruncated && (
-        <p className="crm-muted">
-          Showing the latest 200 registered customers along with recorded conversations.
-        </p>
-      )}
       {inboxError && (
         <div className={styles.error} role="alert">
           <AlertCircle size={16} />
           <span>{inboxError}</span>
-        </div>
-      )}
-      {senderPhone && (
-        <div
-          className={`${styles.senderStatus} ${testSender ? styles.testSender : ''}`}
-          role="status"
-        >
-          <div>
-            <strong>
-              {personalConnection ? 'Linked WhatsApp number' : 'API sending number'}: {senderPhone}
-            </strong>
-            <span>
-              {personalConnection
-                ? 'Personal / mobile WhatsApp'
-                : testSender
-                  ? 'Meta test number'
-                  : inbox?.senderName || 'Connected business number'}
-            </span>
-          </div>
-          <p>
-            {personalConnection
-              ? 'Individual messages use your linked WhatsApp. Manage this device from WhatsApp → Linked devices on your phone.'
-              : testSender
-                ? 'This API is connected to a Meta test number. It supports the test recipients added in Meta, and is not your lab’s mobile WhatsApp number. To use your lab number while keeping its WhatsApp Business app, use supported Coexistence onboarding.'
-                : 'API messages use this number. A verified connection does not open a reply window for every customer.'}
-          </p>
-          {onOpenIntegration && isOwnWorkspace && (
-            <button className="text-button" type="button" onClick={onOpenIntegration}>
-              View connected number
-            </button>
-          )}
         </div>
       )}
       {inbox && !inbox.configured && (
@@ -727,56 +739,82 @@ export default function WhatsAppInbox({
           )}
         </div>
       )}
-      {webhookUrl && (
-        <details className={styles.webhook}>
-          <summary>WhatsApp callback URL</summary>
-          <p>Use this callback URL when subscribing your WhatsApp app in Meta.</p>
-          <div>
-            <input aria-label="WhatsApp callback URL" readOnly value={webhookUrl} />
-            <button
-              type="button"
-              className="button secondary small-button"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(webhookUrl);
-                  setCopyMessage('Callback URL copied.');
-                } catch {
-                  setCopyMessage('Select the callback URL and copy it.');
-                }
-              }}
-            >
-              <Copy size={14} /> Copy
-            </button>
-          </div>
-          {copyMessage && <small role="status">{copyMessage}</small>}
-        </details>
-      )}
       <div className={`${styles.shell} ${selected ? styles.hasSelection : ''}`}>
         <aside className={styles.threads} aria-label="Customer conversations">
           <div className={styles.threadHeading}>
-            <h3>{personalConnection ? 'Chats' : 'Customers'}</h3>
-            <span>{contacts.length}</span>
-            {personalConnection && canWrite && (
+            <h2>Chats</h2>
+            <div className={styles.toolbar}>
+              {personalConnection && canWrite && (
+                <button
+                  type="button"
+                  className={styles.iconAction}
+                  onClick={() => setNewChat(true)}
+                  aria-label="New WhatsApp chat"
+                  title="New chat"
+                >
+                  <Plus size={21} />
+                </button>
+              )}
               <button
-                className={`icon-button ${styles.newChat}`}
-                onClick={() => setNewChat(true)}
-                aria-label="New WhatsApp chat"
-                title="New chat"
+                type="button"
+                className={styles.iconAction}
+                aria-label="Conversation filters"
+                aria-expanded={showFilters}
+                aria-controls="whatsapp-chat-filters"
+                title="Conversation filters"
+                onClick={() => setShowFilters((value) => !value)}
               >
-                <Plus size={20} />
+                <ListFilter size={20} />
+                {(assignmentFilter !== 'all' || labelFilter) && <i aria-hidden="true" />}
               </button>
-            )}
+              <button
+                type="button"
+                className={styles.iconAction}
+                aria-label={canSync ? 'Sync chats' : 'Refresh conversations'}
+                title={canSync ? 'Sync chats' : 'Refresh conversations'}
+                disabled={syncBusy || inboxLoading}
+                onClick={() => {
+                  if (canSync) void syncChats();
+                  else {
+                    inboxRevision.current = undefined;
+                    detailRevision.current = undefined;
+                    void refreshInbox();
+                    if (selected) void refreshDetail(selected, true);
+                  }
+                }}
+              >
+                <RefreshCw size={18} className={syncBusy || inboxLoading ? 'spin' : undefined} />
+              </button>
+            </div>
           </div>
+          {((team?.workspaces.length ?? 0) > 1 || !isOwnWorkspace) && (
+            <div className={styles.workspacePicker}>
+              <select
+                aria-label="Inbox workspace"
+                value={workspace || ownUid}
+                onChange={(e) => changeWorkspace(e.target.value)}
+              >
+                {(team?.workspaces?.length
+                  ? team.workspaces
+                  : [{ id: workspace || ownUid, name: 'Current workspace' }]
+                ).map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <label className={styles.search}>
-            <Search size={16} />
+            <Search size={18} />
             <input
               aria-label="Search WhatsApp customers"
-              placeholder="Search name or phone"
+              placeholder="Search chats"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <div className="crm-inbox-filters">
+          <div id="whatsapp-chat-filters" className={styles.filters} hidden={!showFilters}>
             <select
               aria-label="Filter conversations"
               value={assignmentFilter}
@@ -794,6 +832,14 @@ export default function WhatsAppInbox({
               onChange={(e) => setLabelFilter(e.target.value)}
             />
           </div>
+          {inbox?.history?.phase === 'syncing' && (
+            <progress
+              className={styles.syncProgress}
+              max={100}
+              value={inbox.history.progress ?? undefined}
+              aria-label="Syncing chats from WhatsApp"
+            />
+          )}
           <div className={styles.contactList}>
             {inboxLoading && !inbox && !contacts.length ? (
               <div className={styles.smallEmpty} role="status">
@@ -808,25 +854,37 @@ export default function WhatsAppInbox({
                   onClick={() => chooseContact(item.id)}
                   aria-pressed={selected === item.id}
                 >
-                  <span className={styles.avatar}>
-                    {initials(item.name) || <MessageCircle size={18} />}
-                  </span>
+                  <ChatAvatar
+                    name={item.name}
+                    path={
+                      personalConnection && inbox?.configured && isOwnWorkspace && item.conversation
+                        ? '/api/whatsapp/chats/' + encodeURIComponent(item.id) + '/avatar'
+                        : undefined
+                    }
+                  />
                   <span className={styles.contactBody}>
                     <span className={styles.contactName}>
                       <strong>{item.name}</strong>
                       <small>{messageTime(item.conversation?.lastMessageAt)}</small>
                     </span>
-                    <span className={styles.contactPhone}>+{item.phone.replace(/\D/g, '')}</span>
-                    {!!item.meta?.labels.length && (
-                      <span className="crm-contact-labels">{item.meta.labels.join(' · ')}</span>
-                    )}
                     <span className={styles.contactPreview}>
-                      {item.conversation?.lastMessageStatus && (
-                        <Delivery status={item.conversation.lastMessageStatus} compact />
-                      )}
-                      <span>
-                        {item.conversation?.lastMessagePreview || 'No portal message recorded'}
+                      {item.conversation?.lastMessageStatus &&
+                        item.conversation.lastMessageStatus !== 'received' && (
+                          <Delivery status={item.conversation.lastMessageStatus} />
+                        )}
+                      <span className={styles.previewText}>
+                        {item.conversation?.lastMessagePreview || 'Start a conversation'}
                       </span>
+                      {!!item.conversation?.unreadCount && (
+                        <small
+                          className={styles.unread}
+                          aria-label={item.conversation.unreadCount + ' unread messages'}
+                        >
+                          {item.conversation.unreadCount > 99
+                            ? '99+'
+                            : item.conversation.unreadCount}
+                        </small>
+                      )}
                     </span>
                   </span>
                 </button>
@@ -845,65 +903,66 @@ export default function WhatsAppInbox({
               </div>
             )}
           </div>
-          <div className={styles.threadFooter}>
-            <ShieldCheck size={13} />
-            {lastSynced ? `Updated ${messageTime(lastSynced)}` : 'Private to your workspace'}
-          </div>
         </aside>
-        <div
-          className={`${styles.conversationPane} ${team && activeContact ? 'crm-chat-with-tools' : ''}`}
-        >
+        <div className={styles.conversationPane} id="whatsapp-chat-pane">
           {selected && (activeContact || detailLoading || detailError) ? (
             <>
               <header className={styles.chatHeader}>
                 <button
                   type="button"
-                  className={`icon-button ${styles.backButton}`}
-                  onClick={() => setSelected(null)}
-                  aria-label="Back to customers"
+                  className={`${styles.iconAction} ${styles.backButton}`}
+                  onClick={() => {
+                    setSelected(null);
+                    onSelect?.(null);
+                  }}
+                  aria-label="Back to chats"
                 >
                   <ArrowLeft size={20} />
                 </button>
-                <span className={styles.avatar}>
-                  {initials(activeContact?.name || '') || <MessageCircle size={18} />}
-                </span>
+                <ChatAvatar
+                  name={activeContact?.name || ''}
+                  path={
+                    personalConnection &&
+                    configured &&
+                    isOwnWorkspace &&
+                    activeContact?.conversation
+                      ? '/api/whatsapp/chats/' + encodeURIComponent(activeContact.id) + '/avatar'
+                      : undefined
+                  }
+                />
                 <div className={styles.chatTitle}>
                   <h3>
                     {activeContact?.name ||
                       (detailLoading ? 'Loading conversation…' : 'Conversation')}
                   </h3>
-                  <p>
-                    {activeContact
-                      ? `+${activeContact.phone.replace(/\D/g, '')}`
-                      : detailError
-                        ? 'Unable to open this conversation'
-                        : 'Checking recorded messages'}
-                  </p>
                 </div>
                 {activeContact && (
                   <a
-                    className={`button secondary small-button ${styles.openApp}`}
+                    className={styles.iconAction}
                     href={chatLink(activeContact.phone, text.trim())}
                     target="_blank"
                     rel="noopener noreferrer"
+                    aria-label="Open conversation in WhatsApp"
+                    title="Open in WhatsApp"
                   >
-                    <ExternalLink size={14} /> Open WhatsApp
+                    <ExternalLink size={18} />
                   </a>
                 )}
+                {team && activeContact && (
+                  <TeamConversationTools
+                    key={(workspace || ownUid) + ':' + selected}
+                    workspace={workspace}
+                    customerId={activeContact.id}
+                    context={team}
+                    compact
+                    onQuickReply={setText}
+                    onChanged={() => {
+                      inboxRevision.current = undefined;
+                      void refreshInbox(true);
+                    }}
+                  />
+                )}
               </header>
-              {team && activeContact && (
-                <TeamConversationTools
-                  key={(workspace || ownUid) + ':' + selected}
-                  workspace={workspace}
-                  customerId={activeContact.id}
-                  context={team}
-                  onQuickReply={setText}
-                  onChanged={() => {
-                    inboxRevision.current = undefined;
-                    void refreshInbox(true);
-                  }}
-                />
-              )}
               <div
                 className={styles.messages}
                 ref={scrollArea}
@@ -939,6 +998,9 @@ export default function WhatsAppInbox({
                 ) : messages.length ? (
                   messages.map((message, index) => {
                     const day = messageDay(message.createdAt);
+                    const isPhoto = (message.type as string) === 'image';
+                    const imageAvailable = (message as ChatMessage & { imageAvailable?: boolean })
+                      .imageAvailable;
                     const showDay =
                       index === 0 || day !== messageDay(messages[index - 1].createdAt);
                     return (
@@ -952,17 +1014,32 @@ export default function WhatsAppInbox({
                           className={`${styles.messageRow} ${message.direction === 'outbound' ? styles.outbound : styles.inbound}`}
                         >
                           <article className={styles.bubble}>
-                            <p>
-                              {message.text ||
-                                (message.type === 'unsupported'
-                                  ? 'A message type that is not displayed in this inbox.'
-                                  : '')}
-                            </p>
+                            {isPhoto && (
+                              <ChatPhoto
+                                path={
+                                  imageAvailable && activeContact
+                                    ? workspacePath(
+                                        '/api/account/inbox/' +
+                                          encodeURIComponent(activeContact.id) +
+                                          '/messages/' +
+                                          encodeURIComponent(message.id) +
+                                          '/image',
+                                        workspace,
+                                      )
+                                    : undefined
+                                }
+                              />
+                            )}
+                            {(message.text || (!isPhoto && message.type === 'unsupported')) && (
+                              <p>{message.text || 'This message type is not available here.'}</p>
+                            )}
                             <div className={styles.messageMeta}>
                               <time dateTime={message.createdAt}>
                                 {messageTime(message.createdAt)}
                               </time>
-                              <Delivery status={message.status} />
+                              {message.direction === 'outbound' && (
+                                <Delivery status={message.status} />
+                              )}
                             </div>
                             {message.error && (
                               <small className={styles.messageError}>{message.error}</small>
@@ -1059,7 +1136,7 @@ export default function WhatsAppInbox({
                     }
                     value={text}
                     maxLength={4096}
-                    rows={2}
+                    rows={1}
                     disabled={sending || !canWrite}
                     onChange={(event) => {
                       setText(event.target.value);
@@ -1103,10 +1180,6 @@ export default function WhatsAppInbox({
                     Open WhatsApp app with this draft
                   </a>
                 )}
-                <small>
-                  Delivery and read ticks come from WhatsApp. Opening the app does not mark a
-                  message as sent here.
-                </small>
               </form>
             </>
           ) : (
@@ -1114,15 +1187,8 @@ export default function WhatsAppInbox({
               <span className={styles.welcomeIcon}>
                 <MessageCircle size={50} strokeWidth={1.3} />
               </span>
-              <h3>Every conversation, cared for.</h3>
-              <p>
-                {personalConnection
-                  ? 'Select a chat to read messages and reply here. Use + to open a new WhatsApp conversation.'
-                  : 'Select a customer to view recorded WhatsApp messages, check their delivery status or open a chat in WhatsApp.'}
-              </p>
-              <span className={styles.trust}>
-                <ShieldCheck size={15} /> Private conversations · Real message status
-              </span>
+              <h3>Select a chat</h3>
+              <p>Open a conversation to read messages and reply.</p>
             </div>
           )}
         </div>

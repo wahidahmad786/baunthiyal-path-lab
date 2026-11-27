@@ -7,6 +7,7 @@ import {
 } from './account-chat-api';
 import { openPersonal, sealPersonal } from './personal-auth';
 import { personalMessageId, personalPhone } from './personal-events';
+import { capturePersonalImage, isPersonalPhoto, type PersonalImage } from './personal-image';
 import type { ChatMessage, ChatMessageStatus } from './chat-types';
 import type { WAMessage } from '@whiskeysockets/baileys';
 export type PersonalHistoryStatus = {
@@ -20,7 +21,11 @@ export type PersonalHistoryStatus = {
   lastSyncedAt?: string | null;
   requestId?: string;
 };
-export type PersonalHistoryMessage = ChatMessage & { personalId: string; source: 'phone_history' };
+export type PersonalHistoryMessage = ChatMessage & {
+  personalId: string;
+  source: 'phone_history';
+  personalImage?: PersonalImage;
+};
 export const historyStatusPath = 'personalHistoryStatus/current';
 export const historyLimits = { chats: 500, messagesPerChat: 500, bytesPerChat: 520000 };
 export function personalReceiptStatus(value: unknown, outbound: boolean): ChatMessageStatus {
@@ -61,37 +66,42 @@ export async function personalMessageFrom(
     message.message.viewOnceMessage ||
     message.message.viewOnceMessageV2 ||
     message.message.viewOnceMessageV2Extension;
-  const text = viewOnce
-    ? '[View-once message — open in WhatsApp]'
-    : content.conversation ||
-      content.extendedTextMessage?.text ||
-      content.imageMessage?.caption ||
-      content.videoMessage?.caption ||
-      (content.imageMessage
-        ? '[Image]'
-        : content.videoMessage
-          ? '[Video]'
-          : content.audioMessage
-            ? '[Voice message]'
-            : content.documentMessage
-              ? `[Document: ${String(content.documentMessage.fileName || 'attachment').slice(0, 150)}]`
-              : content.stickerMessage
-                ? '[Sticker]'
-                : content.contactMessage
-                  ? `[Contact: ${String(content.contactMessage.displayName || 'contact').slice(0, 150)}]`
-                  : content.locationMessage
-                    ? '[Location]'
-                    : '[WhatsApp attachment]');
+  const isPhoto = isPersonalPhoto(message);
+  const personalImage = isPhoto ? capturePersonalImage(message) : undefined;
+  const text = isPhoto
+    ? content.imageMessage?.caption || ''
+    : viewOnce
+      ? '[View-once message — open in WhatsApp]'
+      : content.imageMessage
+        ? '[Private photo — open in WhatsApp]'
+        : content.conversation ||
+          content.extendedTextMessage?.text ||
+          content.videoMessage?.caption ||
+          (content.videoMessage
+            ? '[Video]'
+            : content.audioMessage
+              ? '[Voice message]'
+              : content.documentMessage
+                ? `[Document: ${String(content.documentMessage.fileName || 'attachment').slice(0, 150)}]`
+                : content.stickerMessage
+                  ? '[Sticker]'
+                  : content.contactMessage
+                    ? `[Contact: ${String(content.contactMessage.displayName || 'contact').slice(0, 150)}]`
+                    : content.locationMessage
+                      ? '[Location]'
+                      : '[WhatsApp attachment]');
   return {
     id: await personalMessageId(phone, message.key.id),
     personalId: message.key.id,
     source: 'phone_history',
     direction: message.key.fromMe ? 'outbound' : 'inbound',
-    type:
-      typeof content.conversation === 'string' || content.extendedTextMessage
+    type: isPhoto
+      ? 'image'
+      : typeof content.conversation === 'string' || content.extendedTextMessage
         ? 'text'
         : 'unsupported',
     text: String(text).slice(0, 4096),
+    ...(personalImage ? { personalImage } : {}),
     createdAt: new Date(seconds * 1000).toISOString(),
     status: personalReceiptStatus(
       Object.hasOwn(message, 'status') ? message.status : undefined,
@@ -192,7 +202,16 @@ export async function savePersonalHistoryChat(
     const merged = new Map(previous.map((m) => [m.id, m]));
     for (const m of incoming) {
       const prior = merged.get(m.id);
-      merged.set(m.id, prior ? { ...prior, status: nextChatStatus(prior.status, m.status) } : m);
+      merged.set(
+        m.id,
+        prior
+          ? {
+              ...(m.type === 'image' ? { ...prior, ...m } : prior),
+              ...(m.personalImage ? { personalImage: m.personalImage } : {}),
+              status: nextChatStatus(prior.status, m.status),
+            }
+          : m,
+      );
     }
     let messages = [...merged.values()].sort(
       (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -242,7 +261,10 @@ export async function savePersonalHistoryChat(
       ...(newer
         ? {
             lastMessageAt: latest.createdAt,
-            lastMessagePreview: latest.text.slice(0, 240),
+            lastMessagePreview: (latest.text || (latest.type === 'image' ? 'Photo' : '')).slice(
+              0,
+              240,
+            ),
             lastMessageStatus: latest.status,
           }
         : {}),

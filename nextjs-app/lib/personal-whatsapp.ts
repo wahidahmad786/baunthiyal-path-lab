@@ -13,6 +13,7 @@ import { ChatError, ChatStore } from './account-chat-api';
 import { getServiceAccessToken } from './google-service-account';
 import { PersonalAuthStore } from './personal-auth';
 import { lockProvider, providerDocument, reserveProvider } from './whatsapp-provider';
+import { capturePersonalImage, isPersonalPhoto } from './personal-image';
 import { personalPhone, recordPersonalMessage, recordPersonalReceipt } from './personal-events';
 import type { ChatEnvironment } from './chat-types';
 import type { WASocket } from '@whiskeysockets/baileys';
@@ -462,18 +463,19 @@ async function connectSocket(session: Session) {
           content.senderKeyDistributionMessage
         )
           continue;
-        const text =
-          content.conversation ||
-          content.extendedTextMessage?.text ||
-          content.imageMessage?.caption ||
-          content.videoMessage?.caption ||
-          (content.imageMessage
-            ? '[Image received]'
-            : content.audioMessage
-              ? '[Audio received]'
-              : content.documentMessage
-                ? '[Document received]'
-                : '[WhatsApp attachment]');
+        const isPhoto = isPersonalPhoto(message);
+        const text = isPhoto
+          ? content.imageMessage?.caption || ''
+          : content.imageMessage
+            ? '[Private photo — open in WhatsApp]'
+            : content.conversation ||
+              content.extendedTextMessage?.text ||
+              content.videoMessage?.caption ||
+              (content.audioMessage
+                ? '[Audio received]'
+                : content.documentMessage
+                  ? '[Document received]'
+                  : '[WhatsApp attachment]');
         const seconds = Number(message.messageTimestamp || 0),
           at =
             seconds > 0 && seconds * 1000 <= Date.now() + 60000
@@ -488,6 +490,8 @@ async function connectSocket(session: Session) {
           name: message.pushName || undefined,
           at,
           status: message.key.fromMe ? 'sent' : 'received',
+          isPhoto,
+          image: isPhoto ? capturePersonalImage(message) : undefined,
           allowOptOut: seconds * 1000 >= session.linkedSince - 1000,
         });
       }
@@ -863,4 +867,19 @@ export async function requestPersonalHistory(store: ChatStore) {
     throw new ChatError(503, 'The phone history request was not confirmed. Please retry.');
   }
   return personalHistoryStatus(store);
+}
+
+/** Fetch a thumbnail address from this owner's existing link, respecting WhatsApp visibility. */
+export async function personalProfilePictureUrl(uid: string, phone: string) {
+  const session = runtime.sessions.get(uid);
+  if (!session?.socket || session.stopped || session.state.status !== 'connected')
+    throw new ChatError(503, 'Linked WhatsApp is reconnecting');
+  await assertLease(session);
+  try {
+    return await session.socket.profilePictureUrl(`${phone}@s.whatsapp.net`, 'preview', 5000);
+  } catch (error) {
+    const status = (error as { output?: { statusCode?: number } })?.output?.statusCode;
+    if (status === 401 || status === 403 || status === 404) return undefined;
+    throw error;
+  }
 }
