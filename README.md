@@ -32,6 +32,8 @@ The hosted portal corresponds to source commit `ae90432f52c08d6596632c9c5af5458a
 
 For the existing Render web service, use the exact build and environment settings in [`nextjs-app/RENDER.md`](nextjs-app/RENDER.md). The Dockerfile supports both a repository-root and app-directory build context through `APP_SOURCE`.
 
+For Netlify, the root `netlify.toml` publishes a temporary redirect to the existing Node-hosted portal; see [`nextjs-app/NETLIFY.md`](nextjs-app/NETLIFY.md). Netlify is an entry URL in this configuration, not another backend deployment.
+
 For Railway, the root `Dockerfile` builds `nextjs-app` automatically. See [`nextjs-app/RAILWAY.md`](nextjs-app/RAILWAY.md) for service settings and required variables.
 
 Use Node.js 24+ and npm. From `nextjs-app`:

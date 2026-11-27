@@ -1,0 +1,9 @@
+# This site is an entry point to the existing Node-hosted application.
+# Keep WhatsApp linked-device sockets and authenticated APIs on the Node host.
+[build]
+  base = "netlify-entry"
+  publish = "."
+  command = ""
+
+[build.environment]
+  NETLIFY_NEXT_PLUGIN_SKIP = "true"
