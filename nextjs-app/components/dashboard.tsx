@@ -737,8 +737,7 @@ export default function Dashboard() {
                     with a conversation.
                   </h2>
                   <p>
-                    Bring your community closer to preventive care.
-                    <br />
+                    Bring your community closer to preventive care. <br />
                     Create offers that matter, and reach customers who want to hear from you.
                   </p>
                   <button onClick={() => openCampaign()} className="button hero-button">
@@ -1879,7 +1878,7 @@ function CampaignTable({
   onCreate: () => void;
 }) {
   return (
-    <div className="table-scroll">
+    <div className="table-scroll" role="region" aria-label="Campaign table" tabIndex={0}>
       <table>
         <thead>
           <tr>
@@ -1889,9 +1888,7 @@ function CampaignTable({
             <th>Delivered</th>
             <th>Bookings</th>
             <th>Revenue</th>
-            <th>
-              <span className="sr-only">Actions</span>
-            </th>
+            <th scope="col" aria-label="Actions" />
           </tr>
         </thead>
         <tbody>
