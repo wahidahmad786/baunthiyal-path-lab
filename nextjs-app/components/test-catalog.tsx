@@ -20,6 +20,8 @@ import { money } from '@/lib/brand';
 import { accountApi, Field, Modal, Notice, Submit } from './ui';
 import styles from './test-catalog.module.css';
 
+const PAGE_SIZE = 40;
+
 type RatePreview = {
   covered: number;
   eligible: number;
@@ -53,6 +55,7 @@ export default function TestCatalog({
   const [category, setCategory] = useState('all');
   const [kind, setKind] = useState('all');
   const [rate, setRate] = useState('all');
+  const [page, setPage] = useState(1);
   const [importing, setImporting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState('');
@@ -92,21 +95,31 @@ export default function TestCatalog({
     () => [...new Set(tests.map((test) => test.category || 'General'))].sort(),
     [tests],
   );
+  const indexed = useMemo(
+    () =>
+      tests.map((test) => ({
+        test,
+        text: `${test.name} ${test.id} ${(test.aliases || []).join(' ')}`.toLowerCase(),
+      })),
+    [tests],
+  );
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return tests.filter((test) => {
-      const matchesQuery = `${test.name} ${test.id} ${(test.aliases || []).join(' ')}`
-        .toLowerCase()
-        .includes(needle);
-      return (
-        matchesQuery &&
-        (category === 'all' || (test.category || 'General') === category) &&
-        (kind === 'all' || test.type === kind) &&
-        (rate === 'all' || (rate === 'pending' ? test.price === null : test.price !== null))
-      );
-    });
-  }, [tests, query, category, kind, rate]);
-  const priced = tests.filter((test) => test.price !== null).length;
+    return indexed
+      .filter(
+        ({ test, text }) =>
+          text.includes(needle) &&
+          (category === 'all' || (test.category || 'General') === category) &&
+          (kind === 'all' || test.type === kind) &&
+          (rate === 'all' || (rate === 'pending' ? test.price === null : test.price !== null)),
+      )
+      .map(({ test }) => test);
+  }, [indexed, query, category, kind, rate]);
+  const lastPage = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const currentPage = Math.min(page, lastPage);
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const pageRows = visible.slice(start, start + PAGE_SIZE);
+  const priced = useMemo(() => tests.filter((test) => test.price !== null).length, [tests]);
   const pending = tests.length - priced;
   const busy = loading || importing || refreshing;
   const hasFilters = !!query || category !== 'all' || kind !== 'all' || rate !== 'all';
@@ -300,7 +313,10 @@ export default function TestCatalog({
             <span className="sr-only">Search tests, abbreviations or IDs</span>
             <input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(1);
+              }}
               placeholder="Search test, abbreviation or ID…"
               type="search"
             />
@@ -310,7 +326,10 @@ export default function TestCatalog({
             <select
               aria-label="Filter by category"
               value={category}
-              onChange={(event) => setCategory(event.target.value)}
+              onChange={(event) => {
+                setCategory(event.target.value);
+                setPage(1);
+              }}
             >
               <option value="all">All categories</option>
               {categories.map((name) => (
@@ -325,7 +344,10 @@ export default function TestCatalog({
             <select
               aria-label="Filter by test or package"
               value={kind}
-              onChange={(event) => setKind(event.target.value)}
+              onChange={(event) => {
+                setKind(event.target.value);
+                setPage(1);
+              }}
             >
               <option value="all">Tests & packages</option>
               <option value="test">Lab tests</option>
@@ -337,7 +359,10 @@ export default function TestCatalog({
             <select
               aria-label="Filter by rate status"
               value={rate}
-              onChange={(event) => setRate(event.target.value)}
+              onChange={(event) => {
+                setRate(event.target.value);
+                setPage(1);
+              }}
             >
               <option value="all">All rates</option>
               <option value="pending">Rate pending</option>
@@ -372,7 +397,7 @@ export default function TestCatalog({
                 </tr>
               </thead>
               <tbody>
-                {visible.map((test) => (
+                {pageRows.map((test) => (
                   <tr key={test.id}>
                     <td>
                       <strong>{test.name}</strong>
@@ -449,6 +474,7 @@ export default function TestCatalog({
                   setCategory('all');
                   setKind('all');
                   setRate('all');
+                  setPage(1);
                 }}
               >
                 <X size={14} />
@@ -462,11 +488,35 @@ export default function TestCatalog({
           </div>
         )}
         <div className={styles.footer}>
-          <span>
-            Showing {visible.length} of {tests.length} loaded entries
+          <span aria-live="polite">
+            {visible.length
+              ? `Showing ${start + 1}–${start + pageRows.length} of ${visible.length} ${hasFilters ? 'matching' : 'loaded'} entries`
+              : 'No entries to show'}
             {totalTests > tests.length ? ` · ${totalTests} total catalog entries` : ''}.
           </span>
-          {ready && !accountMode && <span>Lab catalog</span>}
+          {lastPage > 1 && (
+            <nav className={styles.pagination} aria-label="Catalog pages">
+              <button
+                type="button"
+                className="button secondary small-button"
+                disabled={currentPage === 1}
+                onClick={() => setPage(currentPage - 1)}
+              >
+                Previous
+              </button>
+              <span>
+                {currentPage} / {lastPage}
+              </span>
+              <button
+                type="button"
+                className="button secondary small-button"
+                disabled={currentPage === lastPage}
+                onClick={() => setPage(currentPage + 1)}
+              >
+                Next
+              </button>
+            </nav>
+          )}
         </div>
       </section>
       {editing && (
@@ -581,7 +631,9 @@ function EditCatalogEntry({
                 step="0.01"
                 placeholder="Enter your actual lab rate"
                 value={rate}
-                onChange={(event) => setRate(event.target.value)}
+                onChange={(event) => {
+                  setRate(event.target.value);
+                }}
               />
             </Field>
           </div>
@@ -591,7 +643,9 @@ function EditCatalogEntry({
               minLength={1}
               maxLength={80}
               value={category}
-              onChange={(event) => setCategory(event.target.value)}
+              onChange={(event) => {
+                setCategory(event.target.value);
+              }}
             />
           </Field>
           <Field label="Abbreviations / alternate names" hint="Separate up to 8 names with commas.">

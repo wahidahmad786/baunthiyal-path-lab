@@ -53,6 +53,7 @@ export function CampaignForm({
   config,
   ready,
   accountWhatsApp = false,
+  linkedInbox = false,
   onOpenIntegration,
   onConnectionCheck,
   onClose,
@@ -63,6 +64,7 @@ export function CampaignForm({
   config: Configuration | null;
   ready: boolean;
   accountWhatsApp?: boolean;
+  linkedInbox?: boolean;
   onOpenIntegration?: () => void;
   onConnectionCheck?: (valid: boolean) => void;
   onClose: () => void;
@@ -90,6 +92,7 @@ export function CampaignForm({
   const [rejectedMarketing, setRejectedMarketing] = useState(0);
   const [approvedMarketing, setApprovedMarketing] = useState(0);
   const [senderVerified, setSenderVerified] = useState(false);
+  const [senderDetail, setSenderDetail] = useState('');
   const templateRequest = useRef(0);
   const [estimating, setEstimating] = useState(false);
   const [estimate, setEstimate] = useState<{ count: number; estimatedCost: number | null } | null>(
@@ -179,16 +182,27 @@ export function CampaignForm({
   }, [loadTemplates]);
   useEffect(() => {
     setSenderVerified(false);
+    setSenderDetail('');
     if (!ready || !config?.whatsapp || !config?.cron) return;
     let active = true;
     void api<SetupReport>('setup')
       .then((report) => {
         const worker = report.checks.find((check) => check.name === 'Scheduled worker activity');
         const webhook = report.checks.find((check) => check.name === 'Signed Meta webhook');
-        if (active)
-          setSenderVerified(worker?.status === 'verified' && webhook?.status === 'verified');
+        if (!active) return;
+        setSenderVerified(worker?.status === 'verified' && webhook?.status === 'verified');
+        setSenderDetail(
+          [
+            webhook?.status !== 'verified' && 'Meta delivery updates are not verified yet.',
+            worker?.status !== 'verified' && 'No recent campaign worker run is verified.',
+          ]
+            .filter(Boolean)
+            .join(' '),
+        );
       })
-      .catch(() => {});
+      .catch(() => {
+        if (active) setSenderDetail('Could not check campaign sending. Reopen the draft to retry.');
+      });
     return () => {
       active = false;
     };
@@ -202,7 +216,14 @@ export function CampaignForm({
     {
       ready: ready && !!config?.whatsapp && !!config?.cron && senderVerified,
       title: 'Campaign sending activated',
-      detail: 'The campaign sender and delivery processing must be active for this workspace.',
+      detail:
+        !ready && linkedInbox
+          ? 'Your QR number is connected for inbox chats. Campaigns need a separate Meta sender enabled in the campaign workspace. Keep the QR inbox connected.'
+          : !ready
+            ? 'Campaigns are sent from the configured lab admin workspace.'
+            : !config?.whatsapp || !config?.cron
+              ? 'Set up the Meta campaign sender and campaign scheduler in the lab admin workspace.'
+              : senderDetail || 'Checking Meta delivery updates and the campaign worker…',
     },
     {
       ready: !!offer,
@@ -212,7 +233,11 @@ export function CampaignForm({
     {
       ready: templatesChecked && !templateError,
       title: 'WhatsApp connection accepted by Meta',
-      detail: templateError || 'Check the saved access token and retrieve your approved templates.',
+      detail:
+        templateError ||
+        (!ready && linkedInbox
+          ? 'Marketing templates belong to the separate Meta sender, not the QR inbox.'
+          : 'Check the saved access token and retrieve your approved templates.'),
     },
     {
       ready: !!template,

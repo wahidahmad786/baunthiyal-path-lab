@@ -19,6 +19,7 @@ import {
   Settings2,
   ShieldCheck,
 } from 'lucide-react';
+import { startVisiblePolling } from '@/lib/visible-polling';
 import type { Customer } from '@/lib/domain';
 import type {
   ChatConversation,
@@ -293,6 +294,7 @@ export default function WhatsAppInbox({
   const detailRequest = useRef(0);
   const inboxInFlight = useRef(false);
   const scrollArea = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
   const sendAttempt = useRef<{ customerId: string; text: string; requestId: string } | null>(null);
   const selectedRef = useRef<string | null>(selected);
   selectedRef.current = selected;
@@ -441,11 +443,9 @@ export default function WhatsAppInbox({
 
   useEffect(() => {
     void refreshInbox();
-    const timer = setInterval(() => {
-      if (document.visibilityState === 'visible') void refreshInbox(true);
-    }, 5000);
+    const stop = startVisiblePolling(() => refreshInbox(true), 5000);
     return () => {
-      clearInterval(timer);
+      stop();
       inboxRequest.current++;
       inboxInFlight.current = false;
     };
@@ -454,6 +454,8 @@ export default function WhatsAppInbox({
   useEffect(() => {
     detailRequest.current++;
     detailRevision.current = undefined;
+    followLatest.current = true;
+    restoreScroll.current = null;
     setDetail(null);
     setOlderMessages([]);
     setOlderBefore(null);
@@ -466,11 +468,9 @@ export default function WhatsAppInbox({
     sendAttempt.current = null;
     if (!selected) return;
     void refreshDetail(selected);
-    const timer = setInterval(() => {
-      if (document.visibilityState === 'visible') void refreshDetail(selected, true);
-    }, 5000);
+    const stop = startVisiblePolling(() => refreshDetail(selected, true), 5000);
     return () => {
-      clearInterval(timer);
+      stop();
       detailRequest.current++;
     };
   }, [selected, refreshDetail]);
@@ -507,18 +507,20 @@ export default function WhatsAppInbox({
           parsedTime(b.conversation?.lastMessageAt) - parsedTime(a.conversation?.lastMessageAt);
         return difference || a.name.localeCompare(b.name);
       });
-  }, [customers, inbox, isOwnWorkspace, team]);
-  const filteredContacts = contacts.filter(
-    (contact) =>
-      `${contact.name} ${contact.phone}`.toLowerCase().includes(query.toLowerCase()) &&
-      (assignmentFilter !== 'mine' || contact.meta?.assignedTo === ownUid) &&
-      (assignmentFilter !== 'open' || contact.meta?.status === 'open') &&
-      (assignmentFilter !== 'resolved' || contact.meta?.status === 'resolved') &&
-      (!labelFilter ||
-        contact.meta?.labels.some((label) =>
-          label.toLowerCase().includes(labelFilter.toLowerCase()),
-        )),
-  );
+  }, [customers, inbox?.conversations, inbox?.metadata, isOwnWorkspace, team?.contacts]);
+  const filteredContacts = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const labelNeedle = labelFilter.trim().toLowerCase();
+    return contacts.filter(
+      (contact) =>
+        (!needle || `${contact.name} ${contact.phone}`.toLowerCase().includes(needle)) &&
+        (assignmentFilter !== 'mine' || contact.meta?.assignedTo === ownUid) &&
+        (assignmentFilter !== 'open' || contact.meta?.status === 'open') &&
+        (assignmentFilter !== 'resolved' || contact.meta?.status === 'resolved') &&
+        (!labelNeedle ||
+          contact.meta?.labels.some((label) => label.toLowerCase().includes(labelNeedle))),
+    );
+  }, [contacts, query, assignmentFilter, ownUid, labelFilter]);
   const contact = contacts.find((item) => item.id === selected);
   const activeContact: Contact | null =
     contact ||
@@ -535,12 +537,11 @@ export default function WhatsAppInbox({
     for (const message of olderMessages) byId.set(message.id, message);
     for (const message of detail?.messages || []) byId.set(message.id, message);
     return [...byId.values()].sort((a, b) => parsedTime(a.createdAt) - parsedTime(b.createdAt));
-  }, [detail, olderMessages]);
+  }, [detail?.messages, olderMessages]);
   const latestMessage = messages.at(-1);
   useEffect(() => {
     const area = scrollArea.current;
-    if (!area) return;
-    area.scrollTop = area.scrollHeight;
+    if (area && followLatest.current) area.scrollTop = area.scrollHeight;
   }, [selected, latestMessage?.id]);
 
   useEffect(() => {
@@ -657,6 +658,7 @@ export default function WhatsAppInbox({
         workspaceRef.current !== workspace
       )
         return;
+      followLatest.current = true;
       setDetail((current) =>
         current
           ? {
@@ -1038,6 +1040,11 @@ export default function WhatsAppInbox({
               <div
                 className={styles.messages}
                 ref={scrollArea}
+                onScroll={(event) => {
+                  const target = event.currentTarget;
+                  followLatest.current =
+                    target.scrollHeight - target.scrollTop - target.clientHeight < 80;
+                }}
                 role="log"
                 aria-label="Recorded WhatsApp messages"
                 aria-live="polite"

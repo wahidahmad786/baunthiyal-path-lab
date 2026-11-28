@@ -3919,3 +3919,25 @@ tbody tr:hover {
     width: 100%;
   }
 }
+
+.section-loading {
+  padding: 1rem;
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  .sidebar:not(.open) {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
+}
+
+.sidebar-close {
+  align-self: flex-end;
+  margin-bottom: 0.4rem;
+}

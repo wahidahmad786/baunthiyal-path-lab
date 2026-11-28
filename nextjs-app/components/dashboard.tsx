@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import {
   Activity,
@@ -50,25 +51,45 @@ import { labClientAuth, clientAuthConfigured, previewOnly } from '@/lib/client-a
 import { LegalLinks } from './legal-links';
 import { hasLabAdminAccess } from '@/lib/access';
 import type { FirebaseSetupSnapshot } from '@/lib/setup-types';
-import WhatsAppConnectionOptions from './whatsapp-connection-options';
 import PublicHome from './public-home';
-import TestCatalog from './test-catalog';
-import WhatsAppInbox from './whatsapp-inbox';
-import TemplateManager from './template-manager';
 import { FileText } from 'lucide-react';
-import TeamSettings from './team-settings';
 import ConnectionAlerts from './connection-alerts';
 import type { CatalogEntry } from '@/lib/catalog-types';
 import { Campaign, Customer, Offer, Booking, calculateROI } from '@/lib/domain';
 import { api, accountApi, Modal, Notice, Field, Submit, dateLabel } from './ui';
-import {
-  CampaignForm,
-  OfferForm,
-  CustomerForm,
-  CatalogForm,
-  BookingJobForm,
-  PaymentForm,
-} from './forms';
+import { startVisiblePolling } from '@/lib/visible-polling';
+function SectionLoading() {
+  return (
+    <div className="panel section-loading" role="status">
+      Loading section…
+    </div>
+  );
+}
+const WhatsAppConnectionOptions = dynamic(() => import('./whatsapp-connection-options'), {
+  loading: SectionLoading,
+});
+const TestCatalog = dynamic(() => import('./test-catalog'), { loading: SectionLoading });
+const WhatsAppInbox = dynamic(() => import('./whatsapp-inbox'), { loading: SectionLoading });
+const TemplateManager = dynamic(() => import('./template-manager'), { loading: SectionLoading });
+const TeamSettings = dynamic(() => import('./team-settings'), { loading: SectionLoading });
+const CampaignForm = dynamic(() => import('./forms').then((m) => m.CampaignForm), {
+  loading: SectionLoading,
+});
+const OfferForm = dynamic(() => import('./forms').then((m) => m.OfferForm), {
+  loading: SectionLoading,
+});
+const CustomerForm = dynamic(() => import('./forms').then((m) => m.CustomerForm), {
+  loading: SectionLoading,
+});
+const CatalogForm = dynamic(() => import('./forms').then((m) => m.CatalogForm), {
+  loading: SectionLoading,
+});
+const BookingJobForm = dynamic(() => import('./forms').then((m) => m.BookingJobForm), {
+  loading: SectionLoading,
+});
+const PaymentForm = dynamic(() => import('./forms').then((m) => m.PaymentForm), {
+  loading: SectionLoading,
+});
 export type TestRecord = CatalogEntry;
 export type State = {
   campaigns: Campaign[];
@@ -168,16 +189,19 @@ export default function Dashboard() {
     ? serverData
     : {
         ...empty,
-        customers: ownCustomers?.customers || [],
+        customers: ownCustomers?.customers || empty.customers,
         totalCustomers: ownCustomers?.totalCustomers || 0,
         optedIn: ownCustomers?.optedIn || 0,
-        tests: ownCatalog?.tests || [],
-        offers: ownCatalog?.offers || [],
+        tests: ownCatalog?.tests || empty.tests,
+        offers: ownCatalog?.offers || empty.offers,
       };
   const customerReady = ready || accountMode;
   const catalogReady = ready || accountCatalogMode;
   const customerDataReady = ready || !!ownCustomers;
   const [loading, setLoading] = useState(true);
+  const [workspaceChecked, setWorkspaceChecked] = useState(false);
+  const stateLoadVersion = useRef(0);
+  const stateLoading = useRef(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [whatsappVerified, setWhatsappVerified] = useState(false);
   const [whatsappProvider, setWhatsappProvider] = useState<'meta' | 'personal' | null>(null);
@@ -197,6 +221,29 @@ export default function Dashboard() {
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
   const [mobile, setMobile] = useState(false);
+  const menuTrigger = useRef<HTMLButtonElement>(null);
+  const sidebar = useRef<HTMLElement>(null);
+  const closeMenu = useCallback(() => {
+    setMobile(false);
+    requestAnimationFrame(() => menuTrigger.current?.focus());
+  }, []);
+  useEffect(() => {
+    if (!mobile) return;
+    sidebar.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeMenu();
+    };
+    const desktop = window.matchMedia('(min-width: 761px)');
+    const onResize = () => {
+      if (desktop.matches) setMobile(false);
+    };
+    document.addEventListener('keydown', onKey);
+    desktop.addEventListener('change', onResize);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      desktop.removeEventListener('change', onResize);
+    };
+  }, [mobile, closeMenu]);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
   const [modal, setModal] = useState<string | null>(null);
@@ -207,26 +254,35 @@ export default function Dashboard() {
   const [messages, setMessages] = useState<Record<string, unknown>[]>([]);
   const [busy, setBusy] = useState(false);
   const load = useCallback(async () => {
+    const version = ++stateLoadVersion.current;
+    stateLoading.current = true;
     setLoading(true);
     try {
       const c = await api<Configuration>('configuration');
+      if (version !== stateLoadVersion.current) return;
       setConfig(c);
       if (c.firebase) {
         try {
           const s = await api<State>('state');
+          if (version !== stateLoadVersion.current) return;
           setData(s);
           setReady(true);
           setError('');
-        } catch (e) {
+        } catch {
+          if (version !== stateLoadVersion.current) return;
           setReady(false);
           // Signed-out and personal onboarding accounts do not request lab records.
           setError('');
         }
       }
     } catch (e) {
-      setError(String(e));
+      if (version === stateLoadVersion.current) setError(String(e));
     } finally {
-      setLoading(false);
+      if (version === stateLoadVersion.current) {
+        stateLoading.current = false;
+        setLoading(false);
+        setWorkspaceChecked(true);
+      }
     }
   }, []);
   useEffect(() => {
@@ -342,12 +398,17 @@ export default function Dashboard() {
   }, [toast]);
   useEffect(() => {
     if (!ready) return;
-    const id = setInterval(() => {
-      void api<State>('state')
-        .then(setData)
-        .catch(() => {});
+    let active = true;
+    const stop = startVisiblePolling(async () => {
+      if (stateLoading.current) return;
+      const version = stateLoadVersion.current;
+      const next = await api<State>('state');
+      if (active && version === stateLoadVersion.current) setData(next);
     }, 30000);
-    return () => clearInterval(id);
+    return () => {
+      active = false;
+      stop();
+    };
   }, [ready]);
   const notify = (s: string) => setToast(s);
   const done = async (message = 'Saved successfully') => {
@@ -385,7 +446,7 @@ export default function Dashboard() {
     setSection(id);
     setQuery('');
     setStatus('all');
-    setMobile(false);
+    if (mobile) closeMenu();
   }
   const total = data.campaigns.reduce(
     (v, c) => ({
@@ -429,7 +490,7 @@ export default function Dashboard() {
   const consentCustomer = modal?.startsWith('consent:')
     ? data.customers.find((c) => c.id === modal.split(':')[1])
     : undefined;
-  if (!authChecked || loading)
+  if (!authChecked || !workspaceChecked)
     return (
       <div className="workspace-loading" role="status">
         <img src="/logo.svg" width={48} height={48} alt="Baunthiyal Path Lab" />
@@ -441,9 +502,20 @@ export default function Dashboard() {
     <div className="app-shell">
       <aside
         className={`sidebar ${mobile ? 'open' : ''}`}
+        id="workspace-sidebar"
+        ref={sidebar}
         aria-label="Workspace sidebar"
-        tabIndex={0}
+        tabIndex={-1}
       >
+        {mobile && (
+          <button
+            className="icon-button sidebar-close"
+            onClick={closeMenu}
+            aria-label="Close navigation"
+          >
+            <X size={20} />
+          </button>
+        )}
         <Link href="/" className="brand">
           <img src="/logo.svg" alt="Baunthiyal Path Lab logo" width="45" height="45" />
           <span>
@@ -546,19 +618,18 @@ export default function Dashboard() {
         </div>
       </aside>
       {mobile && (
-        <button
-          className="sidebar-overlay"
-          aria-label="Close navigation"
-          onClick={() => setMobile(false)}
-        />
+        <button className="sidebar-overlay" aria-label="Close navigation" onClick={closeMenu} />
       )}
-      <div className="main-shell">
+      <div className="main-shell" inert={mobile}>
         <header className="topbar">
           <div className="breadcrumb">
             <button
               className="icon-button mobile-menu"
               onClick={() => setMobile(true)}
+              ref={menuTrigger}
               aria-label="Open navigation"
+              aria-controls="workspace-sidebar"
+              aria-expanded={mobile}
             >
               <Menu size={20} />
             </button>
@@ -1382,7 +1453,13 @@ export default function Dashboard() {
           data={data}
           config={config}
           ready={ready}
-          accountWhatsApp={!ready && !!previewIdentity && !!config?.accountWhatsApp}
+          accountWhatsApp={
+            !ready &&
+            !!previewIdentity &&
+            !!config?.accountWhatsApp &&
+            whatsappProvider !== 'personal'
+          }
+          linkedInbox={whatsappProvider === 'personal'}
           onConnectionCheck={setWhatsappVerified}
           onOpenIntegration={() => {
             setModal(null);
